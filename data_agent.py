@@ -1,4 +1,4 @@
-# /data_agent.py (FINAL VERSION - SQL-RAG Ready)
+# /data_agent.py (MODIFIED)
 
 import requests
 import sqlite3
@@ -6,14 +6,22 @@ from datetime import datetime
 from typing import Dict, List, Optional
 import json
 import os
-from dotenv import load_dotenv 
+from dotenv import load_dotenv
+# Import the OddsAgent to fetch real-time odds
+from odds_agent import OddsAgent
 
-load_dotenv() 
+load_dotenv()
+
+# --- FIX: REMOVED THE CIRCULAR IMPORT FROM STREAMLIT_APP ---
+# The lines below caused the circular import.
+# from streamlit_app import fetch_matches_from_db, init_data_agent 
+# --- END FIX ---
 
 class DataAgent:
     """
     Data Agent for fetching and managing sports data.
-    Provides tools for API fetching, storage, and SQL-Augmented Context retrieval.
+    Provides tools for API fetching, storage, SQL-Augmented Context retrieval,
+    and fetching live bookmaker odds.
     """
     
     def __init__(self, sport_type: str = "football", db_path: str = "betting_edge.db"):
@@ -50,7 +58,9 @@ class DataAgent:
 
         self.db_path = db_path
         self._init_database()
-    
+        # Initialize the OddsAgent for fetching external odds
+        self.odds_agent = OddsAgent()
+
     def _init_database(self):
         """Initialize SQLite database with required schemas."""
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
@@ -87,7 +97,7 @@ class DataAgent:
         conn.close()
         print(f"Database initialized at {self.db_path}")
 
-    # --- CORE FETCHING LOGIC (Unchanged) ---
+    # --- CORE FETCHING LOGIC (Unchanged from what you provided) ---
     def fetch_matches(self, league_id: int = None, season: int = None, 
                       from_date: Optional[str] = None, to_date: Optional[str] = None,
                       year: Optional[int] = None, week: Optional[int] = None) -> List[Dict]:
@@ -210,11 +220,74 @@ class DataAgent:
             "latest_odds": latest_odds,
         }
 
+    # --- REAL-TIME ODDS FETCHING ---
+    
+    def fetch_odds(self, match_id: int) -> Optional[Dict[str, float]]:
+        """
+        Fetches the latest bookmaker odds for a given match_id from The Odds API.
+        Takes a match_id, finds the team names, and calls the OddsAgent.
+        """
+        # 1. Get match details from the DB to find team names and sport
+        match_details = self._safe_fetch_one(
+            'SELECT home_team_name, away_team_name, sport_type FROM matches WHERE match_id = ?',
+            (match_id,)
+        )
+        
+        if not match_details:
+            print(f"❌ Match ID {match_id} not found in database.")
+            return None
+
+        home_team = match_details['home_team_name']
+        away_team = match_details['away_team_name']
+        sport_type = match_details['sport_type']
+
+        # 2. Map internal sport type to The Odds API sport key
+        sport_mapping = {
+            "football": "soccer_epl", # Defaulting to EPL for 'football'
+            "college_football": "americanfootball_ncaaf",
+            "basketball": "basketball_nba"
+        }
+        odds_api_sport = sport_mapping.get(sport_type)
+        
+        if not odds_api_sport:
+            print(f"❌ No Odds API mapping for sport: {sport_type}")
+            return None
+
+        # 3. Fetch odds from the external API
+        print(f"🔍 Fetching odds for {home_team} vs {away_team} ({odds_api_sport})...")
+        odds_data = self.odds_agent.get_upcoming_odds(sport=odds_api_sport, regions="us,eu", markets="h2h")
+
+        # 4. Find the matching event in the API response
+        for event in odds_data:
+            # Simple string matching. For production, fuzzy matching might be better.
+            if (home_team in event['home_team'] or event['home_team'] in home_team) and \
+               (away_team in event['away_team'] or event['away_team'] in away_team):
+                
+                # Found the event, now get the odds from the first bookmaker
+                if event.get('bookmakers'):
+                    bookmaker = event['bookmakers'][0]
+                    for market in bookmaker.get('markets', []):
+                        if market['key'] == 'h2h':
+                            odds = {}
+                            for outcome in market['outcomes']:
+                                if outcome['name'] == event['home_team']:
+                                    odds['home_odds'] = outcome['price']
+                                elif outcome['name'] == event['away_team']:
+                                    odds['away_odds'] = outcome['price']
+                                elif outcome['name'].lower() == 'draw':
+                                    odds['draw_odds'] = outcome['price']
+                            
+                            print(f"✅ Found odds: {odds}")
+                            return odds
+        
+        print(f"❌ Could not find odds for {home_team} vs {away_team} in API response.")
+        return None
+
     # --- PLACEHOLDERS (Cleaned up) ---
     def fetch_stats(self, match_id: int): return None
-    def fetch_odds(self, match_id: int): return None
+    # store_odds is not needed if we are only fetching for verification and not storing
+    def store_odds(self, match_id, data): pass 
     def store_stats(self, match_id, data): pass
-    def store_odds(self, match_id, data): pass
     def refresh_data_for_match(self, match_id): pass
     
     def get_recent_matches(self, team_id: int, limit: int = 5) -> List[Dict]:

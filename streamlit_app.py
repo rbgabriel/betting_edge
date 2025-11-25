@@ -3,6 +3,14 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta
+from utils import (
+    fetch_matches_from_db, 
+    init_data_agent, 
+    get_db_connection, 
+    get_unique_leagues,
+    fetch_match_stats,
+    fetch_odds
+)
 import os
 from data_agent import DataAgent
 from dotenv import load_dotenv
@@ -68,118 +76,31 @@ if "odds_agent" not in st.session_state:
     st.session_state.odds_agent = None
 
 
-def init_data_agent(sport_type: str = "football"):
-    """Initialize the data agent with API key."""
-    try:
-        st.session_state.data_agent = DataAgent(
-            sport_type=sport_type,
-            db_path="betting_edge.db"
-        )
-        st.session_state.sport_type = sport_type
-        st.session_state.db_initialized = True
-        return True
-    except Exception as e:
-        st.error(f"Failed to initialize: {e}")
-        return False
 
 
-def get_db_connection():
-    """Get database connection."""
-    return sqlite3.connect("betting_edge.db", check_same_thread=False)
 
 
-def get_unique_leagues(sport_type: str):
-    """Get all unique leagues for the selected sport_type from the DB."""
-    if not os.path.exists("betting_edge.db"):
-        return ["All Leagues"]
-    conn = get_db_connection()
-    query = "SELECT DISTINCT league_name FROM matches WHERE sport_type = ? ORDER BY league_name"
-    try:
-        df = pd.read_sql_query(query, conn, params=(sport_type,))
-        conn.close()
-        return ["All Leagues"] + df["league_name"].tolist()
-    except Exception as e:
-        print(f"Error getting unique leagues: {e}")
-        conn.close()
-        return ["All Leagues"]
 
 
-def fetch_matches_from_db(
-    sport_type: str,
-    league_name: Optional[str] = None,
-    include_past: bool = True,
-    include_future: bool = True,
-    limit: int = 100,
-):
-    """Fetch matches from database with filtering options."""
-    conn = get_db_connection()
-
-    params = [sport_type]
-    conditions = ["sport_type = ?"]
-
-    if not include_past:
-        conditions.append("match_date >= datetime('now')")
-    if not include_future:
-        conditions.append("match_date < datetime('now')")
-
-    if league_name and league_name != "All Leagues":
-        conditions.append("league_name = ?")
-        params.append(league_name)
-
-    where_clause = f"WHERE {' AND '.join(conditions)}"
-
-    query = f"""
-        SELECT match_id, league_name, match_date,
-               home_team_name, away_team_name,
-               home_score, away_score, status
-        FROM matches
-        {where_clause}
-        ORDER BY match_date DESC
-        LIMIT ?
-    """
-    params.append(limit)
-
-    df = pd.read_sql_query(query, conn, params=tuple(params))
-    conn.close()
-    return df
 
 
-def fetch_match_stats(match_id: int):
-    """Fetch statistics for a specific match."""
-    conn = get_db_connection()
-    query = """
-        SELECT team_name, shots_on_goal, total_shots,
-               ball_possession, corner_kicks, fouls,
-               yellow_cards, red_cards, total_passes, passes_accurate
-        FROM match_stats
-        WHERE match_id = ?
-    """
-    df = pd.read_sql_query(query, conn, params=(match_id,))
-    conn.close()
-    return df
 
 
-def fetch_odds(match_id: int):
-    """Fetch odds for a specific match (from local DB)."""
-    conn = get_db_connection()
-    query = """
-        SELECT bookmaker, home_odds, draw_odds, away_odds
-        FROM odds
-        WHERE match_id = ?
-    """
-    df = pd.read_sql_query(query, conn, params=(match_id,))
-    conn.close()
-    return df
+
 
 
 # NEW: helper to map our sport_type -> Odds API sport key
+# In streamlit_app.py, replace the mapping content:
+
 def map_sport_to_odds_api(sport_type: str) -> str:
     mapping = {
-        "football": "soccer_epl",              # default soccer league
+        # FIX: Use the full, modern key for better compatibility
+        "football": "soccer_england_premier_league", 
         "college_football": "americanfootball_ncaaf",
         "basketball": "basketball_nba",
     }
-    return mapping.get(sport_type, "soccer_epl")
+    # Note: If you encounter further 422 errors, you may need to update the CFB/CBB keys as well.
+    return mapping.get(sport_type, "soccer_england_premier_league")
 
 
 # NEW: helper to lazily init OddsAgent
@@ -302,12 +223,21 @@ with st.sidebar:
         )
 
     if st.button("🔌 Initialize Agent"):
-        with st.spinner("Initializing..."):
-            if init_data_agent(sport_type):
+        with st.spinner(f"Initializing {sport_type.replace('_', ' ').title()} Agent..."):
+            # Call the init_data_agent from utils.py
+            initialized_agent = init_data_agent(sport_type) 
+            
+            if initialized_agent:
+                # Store the successfully initialized agent in session state
+                st.session_state.data_agent = initialized_agent
+                st.session_state.sport_type = sport_type # Also update sport_type
+                st.session_state.db_initialized = True
                 st.success(f"✅ {sport_type.replace('_', ' ').title()} Agent Connected!")
-                st.rerun()
+                st.rerun() # Rerun to display the tabs
             else:
-                st.error("Failed to initialize agent")
+                st.session_state.data_agent = None # Ensure it's None if initialization failed
+                st.session_state.db_initialized = False
+                st.error("Failed to initialize agent. Check API key and logs.")
 
     st.divider()
 
@@ -418,109 +348,187 @@ else:
         with col_ex2:
             st.info("Try: 'Get 2024 college basketball games for Duke'")
 
-        user_query = st.text_input(
-            "Ask the Assistant:", placeholder="Type your request here..."
+        user_query_tab1 = st.text_input( # Changed variable name to avoid conflict with top-level user_query
+            "Ask the Assistant:", placeholder="Type your request here...", key="user_query_tab1"
         )
         
         # Initialize session state for pipeline results if not present
         if "pipeline_results" not in st.session_state:
             st.session_state.pipeline_results = None
+        if "deep_analysis_results" not in st.session_state: # Ensure this is also initialized
+            st.session_state.deep_analysis_results = None
 
-        if st.button("🚀 Run Flow") and user_query:
-            pipeline = BettingEdgePipeline()
+        if st.button("🚀 Run Initial Query") and user_query_tab1: # Changed button text for clarity
+            pipeline = BettingEdgePipeline() # Re-initialize pipeline for each run (or use cached if robust)
 
-            with st.spinner("Running initial query and data fetching..."):
+            with st.spinner("Running initial query and data agent..."):
                 # Run the first part of the pipeline (Query -> Data Fetch -> Filter)
-                result = pipeline.run(user_query)
+                result = pipeline.run(user_query_tab1)
                 st.session_state.pipeline_results = result
+                st.session_state.deep_analysis_results = None # Clear previous deep analysis if new initial query
+            st.experimental_rerun() # Rerun to display initial results
 
-        # Display results if they exist in session state
+        # Display initial results and offer deep analysis
         if st.session_state.pipeline_results:
-            result = st.session_state.pipeline_results
+            initial_query_result = st.session_state.pipeline_results
 
-            if result.get("status") == "query_error" or result.get("status") == "no_matches":
-                st.error(result.get("message", "Flow failed"))
-            else:
-                # 1. Show what the agent understood
-                with st.expander("Structured Query Analysis"):
-                    st.json(result["structured_query"])
+            if initial_query_result.get("status") == "ok":
+                st.success(initial_query_result.get("message", "Initial query successful."))
 
-                # 2. Get the filtered matches list
-                all_filtered_matches = result.get("filtered_matches", [])
-
-                if all_filtered_matches:
-                    st.subheader(f"Found {len(all_filtered_matches)} Matching Games:")
-                    
-                    # Create a nice DataFrame for display
-                    matches_display_df = pd.DataFrame([
-                        {
-                            "Date": m['fixture']['date'][:10], # Simple string slice for date
-                            "League": m['league']['name'],
-                            "Home Team": m['teams']['home']['name'],
-                            "Away Team": m['teams']['away']['name'],
-                            "Score": f"{m['goals']['home']}-{m['goals']['away']}" if m['fixture']['status']['long'] in ['FINISHED', 'Match Finished'] else "N/A"
-                        } for m in all_filtered_matches
-                    ])
-                    
-                    st.dataframe(matches_display_df, use_container_width=True, hide_index=True)
-
-                    # 3. Let user SELECT one match for deep analysis
-                    match_options = matches_display_df.apply(
-                        lambda x: f"{x['Home Team']} vs {x['Away Team']} ({x['Date']})",
-                        axis=1
-                    ).tolist()
-                    
-                    selected_match_idx = st.selectbox(
-                        "Select a match for detailed prediction and recommendation:",
-                        range(len(match_options)),
-                        format_func=lambda x: match_options[x],
-                        key="selected_pipeline_match"
+                filtered_matches = initial_query_result.get("filtered_matches", [])
+                if filtered_matches:
+                    st.subheader("Select a Match for Deep Analysis:")
+                    # Create a readable list for the selectbox
+                    match_options = {
+                        f"{m['teams']['home']['name']} vs {m['teams']['away']['name']} on {m['fixture']['date'][:10]} (ID: {m['fixture']['id']})": m
+                        for m in filtered_matches
+                    }
+                    selected_match_key = st.selectbox(
+                        "Choose a match:",
+                        options=list(match_options.keys()),
+                        key="match_selector"
                     )
 
-                    # 4. Run Deep Analysis on the SELECTED match
-                    if st.button("🔮 Analyze Selected Match"):
-                        selected_match_data = all_filtered_matches[selected_match_idx]
+                    if selected_match_key:
+                        selected_match_for_analysis = match_options[selected_match_key]
                         
-                        # Re-initialize pipeline to run the downstream agents
-                        pipeline = BettingEdgePipeline() 
+                        if st.button("▶️ Run Deep Analysis for Selected Match", key="run_deep_analysis_button"): # Changed button text
+                            pipeline = BettingEdgePipeline() # Re-initialize for deep analysis
+                            with st.spinner("Running prediction, verification, behavior, recommendation, and ethics agents..."):
+                                # Call the deep analysis method of the pipeline
+                                deep_analysis_results = pipeline.run_deep_analysis(selected_match_for_analysis)
+                                st.session_state.deep_analysis_results = deep_analysis_results # Store deep analysis results
+                            st.experimental_rerun() # Rerun to display deep analysis results
+
+                else: # No filtered matches from initial query
+                    st.warning(initial_query_result.get("message", "Agent understood the query, but found no matches."))
+            
+            elif initial_query_result.get("status") == "query_error":
+                st.error(initial_query_result.get("message", "Query agent could not parse that request."))
+            elif initial_query_result.get("status") == "no_matches":
+                st.warning(initial_query_result.get("message", "No matches found from data agent for that sport/season."))
+            else:
+                st.error(initial_query_result.get("message", "An unexpected error occurred during the initial query phase."))
+
+        # Display deep analysis results if available AND successfully run
+        if 'deep_analysis_results' in st.session_state and st.session_state.deep_analysis_results:
+            deep_analysis_result = st.session_state.deep_analysis_results
+
+            if deep_analysis_result.get("status") == "ok":
+                st.success("Deep Analysis Complete!")
+                st.markdown("---")
+
+                col1, col2 = st.columns(2)
+                
+                # --- LEFT COLUMN: MODEL PREDICTION ---
+                with col1:
+                    st.subheader("Prediction Model Output")
+                    
+                    # Get model outputs (safely)
+                    # Check the keys against what PredictionAgentLC.invoke() returns
+                    pred = deep_analysis_result.get('prediction', {}) 
+                    
+                    st.metric(
+                        label=f"Winner (Highest %)",
+                        # Make sure 'predicted_winner_model' is the exact key
+                        value=pred.get('predicted_winner_model', 'N/A'), 
+                        delta="Model Prediction"
+                    )
+                    st.metric(
+                        label="Home Win Probability",
+                        # Make sure 'home_win_probability' is the exact key
+                        value=f"{pred.get('home_win_probability', 0.0):.1%}", 
+                    )
+                    st.metric(
+                        label="Draw Probability",
+                        # Make sure 'draw_probability' is the exact key
+                        value=f"{pred.get('draw_probability', 0.0):.1%}", 
+                    )
+                    st.metric(
+                        label="Away Win Probability",
+                        # Make sure 'away_win_probability' is the exact key
+                        value=f"{pred.get('away_win_probability', 0.0):.1%}", 
+                    )
+
+                # --- RIGHT COLUMN: VALUE VERIFICATION ---
+                with col2:
+                    st.subheader("Value Verification")
+                    # Get verification outputs (safely)
+                    # Check the keys against what OddsVerificationAgentLC.invoke() returns
+                    verify = deep_analysis_result.get('verification', {}) 
+                    
+                    # NEW, CORRECTED LINE IN streamlit_app.py
+                    st.metric(label="Raw Value Edge", value=f"{verify.get('raw_value_edge', 0.0):.2%}", delta=f"Rating: {verify.get('raw_value_edge', 'N/A')}") # Changed 'value_edge_rating' to 'value_edge'
+                    st.metric(
+                        label="Recommended Bet Side",
+                        # Make sure 'recommended_bet_side' is the exact key
+                        value=verify.get('recommended_bet_side', 'None'), 
+                    )
+                    st.metric(
+                        label="Confidence Level",
+                        # Make sure 'confidence' is the exact key
+                        value=verify.get('confidence', 'Low'), 
+                    )
+
+                    # Display Behavior Action and Ethics Check here too for consistency
+                    st.subheader("Behavior Action & Ethics")
+                    
+                    # Ensure action_output is retrieved, defaulting to an empty dict if None
+                    action_output = deep_analysis_result.get('action', {}) 
+                    
+                    # --- THE FIX: Check if the output is a string (a low-level failure) ---
+                    if isinstance(action_output, str):
+                        behavior_action_display = action_output # Use the raw string error if it's not a dict
+                    else:
+                        # Safely access the dictionary key
+                        behavior_action_display = action_output.get('action', 'neutral_not_found') 
                         
-                        with st.spinner(f"Running deep analysis for {selected_match_data['teams']['home']['name']} vs {selected_match_data['teams']['away']['name']}..."):
-                            deep_analysis_result = pipeline.run_deep_analysis(selected_match_data)
-                        
-                        if deep_analysis_result.get("status") == "ok":
-                            # Store match in DB for persistence
-                            if st.session_state.data_agent:
-                                try:
-                                    st.session_state.data_agent.store_match(deep_analysis_result["match"])
-                                except Exception as e:
-                                    print(f"DB Store error: {e}")
+                    st.markdown(f"**Behavior Action:** {behavior_action_display}")
+                    
+                    ethics_output = deep_analysis_result.get('ethics', {})
+                    st.markdown(f"**Ethics Check:** {ethics_output.get('status', 'pending')}")
 
-                            st.success("Analysis Complete!")
-                            
-                            col1, col2 = st.columns(2)
-                            
-                            with col1:
-                                st.subheader("Prediction Model")
-                                st.json(deep_analysis_result["prediction"])
-                                
-                                st.subheader("Verification Agent")
-                                st.json(deep_analysis_result["verification"])
 
-                            with col2:
-                                st.subheader("Behavior Action")
-                                st.write(deep_analysis_result["action"])
-                                
-                                st.subheader("Ethics Check")
-                                st.json(deep_analysis_result["ethics"])
+                # --- FINAL RECOMMENDATION (LLM Narrative) ---
+                st.divider()
+                st.subheader("📝 Final Recommendation (LLM Synthesis)")
+                recommendation_output = deep_analysis_result.get('recommendation', {})
+                st.info(recommendation_output.get("recommendation_text", "No recommendation text available."))
 
-                            st.divider()
-                            st.subheader("📝 Final Recommendation")
-                            st.info(deep_analysis_result["recommendation"])
+                with st.expander("Debugging & Raw Agent Output"):
+                    st.subheader("Full Prediction Output")
+                    st.json(deep_analysis_result.get("prediction", {}))
+                    
+                    st.subheader("Full Verification Output")
+                    st.json(deep_analysis_result.get("verification", {}))
 
-                        else:
-                            st.error(deep_analysis_result.get("message", "Deep analysis failed."))
-                else:
-                    st.warning(f"Agent understood the query, but found no matches involving '{result['structured_query'].get('team_name')}'.")
+                    # --- ADD THIS NEW DEBUGGING INFO ---
+                    st.subheader("Raw selected_match passed to agents")
+                    st.json(deep_analysis_result.get("match", {})) # Add this to see the match data
+                    # --- END NEW DEBUGGING INFO ---
+
+                    st.subheader("Full Recommendation Output")
+                    st.json(deep_analysis_result.get("recommendation", {}))
+                    
+                    st.subheader("Full Ethics Output")
+                    st.json(deep_analysis_result.get("ethics", {}))
+
+                    st.subheader("Raw Value Edges (All Outcomes)")
+                    st.json(deep_analysis_result.get("verification", {}).get("all_value_edges", {}))
+
+            else: # Deep analysis returned an error status
+                st.error(deep_analysis_result.get("message", "Deep analysis failed for an unknown reason."))
+        
+        # This part handles initial query errors and "no matches" from the initial pipeline.run()
+        # It's crucial to have a separate check for initial_query_result to avoid trying to access
+        # deep_analysis_result when only initial results are present or failed.
+        if st.session_state.pipeline_results and st.session_state.pipeline_results.get("status") != "ok":
+            if st.session_state.pipeline_results.get("status") == "query_error":
+                st.error(st.session_state.pipeline_results.get("message", "Query agent could not parse that request."))
+            elif st.session_state.pipeline_results.get("status") == "no_matches":
+                st.warning(st.session_state.pipeline_results.get("message", "Agent understood the query, but found no matches involving that team or criteria."))
+            else:
+                st.error(st.session_state.pipeline_results.get("message", "An unexpected error occurred during the initial query phase."))
 
 
     # Dashboard tab

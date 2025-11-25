@@ -1,84 +1,103 @@
-# /agent_modules/recommendation_agent_wrapper.py
+# /agent_modules/recommendation_agent_wrapper.py (MODIFIED)
 
-import json
-# --- START IMPORT FIX ---
-# Using the correct, legacy import path per your instruction:
-from langchain.chat_models import ChatOpenAI 
-# --- END IMPORT FIX ---
 from langchain_core.prompts import PromptTemplate
-from data_agent import DataAgent 
+from langchain_core.output_parsers import StrOutputParser
+from langchain_community.llms import OpenAI 
+import os
+from typing import Dict, Any
 
 class RecommendationAgentLC:
-    """
-    Agent responsible for synthesizing all structured data (prediction, verification, SQL context)
-    into a final, conversational recommendation.
-    """
-    
     def __init__(self):
-        # Initialize LLM and DataAgent (to access the SQL context method)
-        self.data_agent = DataAgent() 
-        # Using the legacy ChatOpenAI import path
-        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        self.llm = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            temperature=0.7, # You might want to adjust temperature for creativity/determinism
+            max_tokens=750   # <--- INCREASE THIS VALUE (e.g., 750, 1000, or even 1500)
+        )
 
-        # Define the Synthesis Prompt template once
-        self.prompt_template_str = """
-        You are a seasoned sports betting analyst. Your task is to provide a concise recommendation 
-        based on the provided analysis, structured match facts, and the user's inferred intent.
+        # --- MODIFIED PROMPT TEMPLATE ---
+        self.prompt = PromptTemplate.from_template("""
+            You are an AI sports betting analyst. Your goal is to provide a concise, clear, and ethical betting recommendation based on the provided analysis.
 
-        --- MATCH FACTS ---
-        MATCH DETAILS: {match_details}
-        HOME TEAM STATS (Snapshot): {home_stats}
-        LATEST ODDS: {latest_odds}
+            --- Match Details ---
+            Home Team: {home_team_name}
+            Away Team: {away_team_name}
+            Match Date: {match_date}
+            Sport Type: {sport_type}
+            Match Status: {match_status}
+            {score_line_if_available} <-- NEW PLACEHOLDER HERE
+
+            --- Prediction Model Output ---
+            Predicted Winner (Model's Highest Probability): {predicted_winner_model}
+            Home Win Probability: {home_win_probability:.2%}
+            Draw Probability: {draw_probability:.2%}
+            Away Win Probability: {away_win_probability:.2%}
+
+            --- Value Verification Output ---
+            Raw Value Edge: {raw_value_edge:.4f}
+            Value Edge Rating: {value_edge_rating}
+            Recommended Bet Side: {recommended_bet_side}
+            Confidence Level: {confidence_level}
+
+            --- Behavior Action ---
+            Agent's Behavior Action: {behavior_action}
+
+            --- Task ---
+            Synthesize this information into a clear recommendation.
+            1. State the teams involved, match status, and the predicted winner.
+            2. If the match is finished, mention the final score.
+            3. Explain the value edge, if any, and its rating.
+            4. State the recommended bet side and confidence.
+            5. Provide a final recommendation.
+            6. Ensure the recommendation is ethical and responsible. If no value edge is found, recommend against betting.
+
+            Final Recommendation (max 250 words):
+        """)
+        # --- END MODIFIED PROMPT TEMPLATE ---
         
-        --- MODEL ANALYSIS ---
-        PREDICTION: Home Win Prob: {prediction_prob_home}, Away Win Prob: {prediction_prob_away}
-        VERIFICATION: Value Edge is {value_edge} with {confidence} confidence.
-        
-        --- INFERRED INTENT ---
-        BEHAVIOR: {action_tag} (Tailor the tone to this action, e.g., low risk, high education).
+        self.chain = self.prompt | self.llm | StrOutputParser()
 
-        --- TASK ---
-        1. Summarize the key data point from the FACTS section (e.g., possession, shots).
-        2. State the final recommendation (Bet For/Against) and the rationale based on the Value Edge.
-        3. Keep the entire response clear, concise, and under 4 sentences.
-        """
-        # Create the PromptTemplate here, outside of invoke
-        self.prompt = PromptTemplate.from_template(self.prompt_template_str)
+    def invoke(self, inputs: Dict[str, Any]) -> Dict[str, str]:
+        match_details = inputs.get("match", {})
+        prediction_output = inputs.get("prediction_output", {})
+        verification_output = inputs.get("verification_output", {})
+        behavior_output = inputs.get("behavior_output", {})
 
-    def invoke(self, context: dict):
-        """
-        Generates the final recommendation by interpreting structured data from context.
-        """
-        match_id = context['match']['fixture']['id']
-        
-        # 1. SQL-RAG: Fetch Structured Context from Database
-        structured_context = self.data_agent.get_full_match_context(match_id)
+        # Extract score information if available (for finished matches)
+        match_status = match_details.get("fixture", {}).get("status", "N/A")
+        home_score = match_details.get("goals", {}).get("home")
+        away_score = match_details.get("goals", {}).get("away")
 
-        try:
-            # 2. Prepare the input dictionary for the prompt, ensuring all complex objects are JSON strings
-            input_data = {
-                # Convert dictionaries to JSON strings to prevent prompt template serialization errors
-                "match_details": json.dumps(structured_context.get('match_details', {})),
-                "home_stats": json.dumps(structured_context.get('home_team_stats', {})),
-                "latest_odds": json.dumps(structured_context.get('latest_odds', {})),
-                
-                # Analysis (other variables are already strings/floats)
-                "prediction_prob_home": f"{context['prediction']['home_win_prob']:.2f}",
-                "prediction_prob_away": f"{context['prediction']['away_win_prob']:.2f}",
-                "value_edge": context['verification']['value_edge'],
-                "confidence": context['verification']['confidence'],
-                "action_tag": context['action'],
-            }
+        score_line = ""
+        if match_status and match_status.lower() in ['finished', 'ft', 'full-time', 'match finished'] and home_score is not None and away_score is not None:
+            score_line = f"Final Score: {match_details.get('teams', {}).get('home', {}).get('name', 'Home Team')} {home_score} - {away_score} {match_details.get('teams', {}).get('away', {}).get('name', 'Away Team')}"
+        elif match_status:
+            score_line = f"Match is currently: {match_status.replace('_', ' ').title()}"
 
-            # 3. Explicitly format the prompt before sending it to the LLM
-            formatted_prompt = self.prompt.format(**input_data)
-            
-            # 4. Invoke the LLM directly with the formatted string (avoids chain complexity)
-            final_recommendation = self.llm.invoke(formatted_prompt)
-            
-            # 5. Extract the string content
-            return final_recommendation.content
-            
-        except Exception as e:
-            # This will help us debug if there's another issue
-            return f"Error during recommendation synthesis: {e}"
+
+        prompt_inputs = {
+            "home_team_name": match_details.get("teams", {}).get("home", {}).get("name", "N/A"),
+            "away_team_name": match_details.get("teams", {}).get("away", {}).get("name", "N/A"),
+            "match_date": match_details.get("fixture", {}).get("date", "N/A")[:10],
+            "sport_type": match_details.get("sport_type", "N/A"),
+            "match_status": match_status, # Pass match status
+            "score_line_if_available": score_line, # Pass the constructed score line
+
+            "predicted_winner_model": prediction_output.get("predicted_winner_model", "N/A"),
+            "home_win_probability": prediction_output.get("home_win_probability", 0.0),
+            "draw_probability": prediction_output.get("draw_probability", 0.0),
+            "away_win_probability": prediction_output.get("away_win_probability", 0.0),
+
+            "raw_value_edge": verification_output.get("raw_value_edge", 0.0),
+            "value_edge_rating": verification_output.get("value_edge", "None"), # This is the qualitative rating
+            "recommended_bet_side": verification_output.get("recommended_bet_side", "None"),
+            "confidence_level": verification_output.get("confidence", "Low"),
+
+            "behavior_action": behavior_output.get("action", "neutral_analysis") 
+        }
+
+        if isinstance(behavior_output, str):
+            prompt_inputs["behavior_action"] = behavior_output
+
+        recommendation_text = self.chain.invoke(prompt_inputs)
+
+        return {"recommendation_text": recommendation_text}
