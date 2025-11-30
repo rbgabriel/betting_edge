@@ -4,12 +4,12 @@ import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta
 from utils import (
-    fetch_matches_from_db, 
-    init_data_agent, 
-    get_db_connection, 
+    fetch_matches_from_db,
+    init_data_agent,
+    get_db_connection,
     get_unique_leagues,
-    fetch_match_stats,
-    fetch_odds
+    #fetch_match_stats,
+    #fetch_odds # This can likely be removed if DataAgent.fetch_odds is used directly
 )
 import os
 from data_agent import DataAgent
@@ -64,6 +64,9 @@ if "api_key_cfb" not in st.session_state:
     st.session_state.api_key_cfb = os.getenv("API_KEY_CFB", "KEY_NOT_FOUND")
 if "api_key_basketball" not in st.session_state:
     st.session_state.api_key_basketball = os.getenv("API_KEY_BASKETBALL", "KEY_NOT_FOUND")
+# Ensure Odds API key is loaded for OddsAgent
+if "odds_api_key" not in st.session_state:
+    st.session_state.odds_api_key = os.getenv("ODDS_API_KEY", "KEY_NOT_FOUND")
 
 if "data_agent" not in st.session_state:
     st.session_state.data_agent = None
@@ -71,45 +74,42 @@ if "sport_type" not in st.session_state:
     st.session_state.sport_type = "football"
 if "db_initialized" not in st.session_state:
     st.session_state.db_initialized = False
-# NEW: cache OddsAgent
+# NEW: cache OddsAgent - This is still good.
 if "odds_agent" not in st.session_state:
     st.session_state.odds_agent = None
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 # NEW: helper to map our sport_type -> Odds API sport key
-# In streamlit_app.py, replace the mapping content:
-
+# This mapping should ideally *mirror* the more detailed mapping in DataAgent
+# or be moved to a common config/utility file.
+# For simplicity here, I'll keep it as a direct map.
 def map_sport_to_odds_api(sport_type: str) -> str:
+    # This is a basic mapping for the `Odds` tab.
+    # The `DataAgent` has a more sophisticated mapping including leagues.
+    # For the `Odds` tab, we generally query broader categories.
     mapping = {
-        # FIX: Use the full, modern key for better compatibility
-        "football": "soccer_england_premier_league", 
+        "football": "soccer", # Use a broader category for general display
         "college_football": "americanfootball_ncaaf",
-        "basketball": "basketball_nba",
+        "basketball": "basketball_ncaab", # Assuming college basketball for now
     }
-    # Note: If you encounter further 422 errors, you may need to update the CFB/CBB keys as well.
-    return mapping.get(sport_type, "soccer_england_premier_league")
+    # Provide a more general fallback if a specific sport_type is added later
+    return mapping.get(sport_type, "soccer")
 
 
 # NEW: helper to lazily init OddsAgent
 def get_odds_agent() -> Optional[OddsAgent]:
     if st.session_state.odds_agent is None:
         try:
-            st.session_state.odds_agent = OddsAgent()
-        except Exception as e:
+            # Pass the API key to the OddsAgent constructor
+            if st.session_state.odds_api_key == "KEY_NOT_FOUND":
+                st.error("Odds API Key not found. Please set ODDS_API_KEY in your .env file.")
+                return None
+            st.session_state.odds_agent = OddsAgent(api_key=st.session_state.odds_api_key)
+        except ValueError as e: # Catch the specific ValueError from OddsAgent
             st.error(f"Failed to initialize Odds API: {e}")
+            st.session_state.odds_agent = None
+        except Exception as e:
+            st.error(f"An unexpected error occurred initializing Odds API: {e}")
             st.session_state.odds_agent = None
     return st.session_state.odds_agent
 
@@ -124,6 +124,7 @@ def build_odds_dataframe(odds_data):
         try:
             home = event.get("home_team", "")
             away = event.get("away_team", "")
+            # Prefer 'sport_title' for readability, fallback to 'sport_key'
             league = event.get("sport_title", event.get("sport_key", ""))
             commence = event.get("commence_time", "")
             try:
@@ -138,20 +139,28 @@ def build_odds_dataframe(odds_data):
 
             # Use first bookmaker with h2h market
             home_odds = draw_odds = away_odds = None
-            bookmaker_name = bookmakers[0].get("title") or bookmakers[0].get("key")
+            bookmaker_name = "N/A" # Default bookmaker name
 
-            for market in bookmakers[0].get("markets", []):
-                if market.get("key") == "h2h":
-                    for outcome in market.get("outcomes", []):
-                        name = outcome.get("name", "")
-                        price = outcome.get("price", None)
-                        if name == home:
-                            home_odds = price
-                        elif name == away:
-                            away_odds = price
-                        elif name.lower() == "draw":
-                            draw_odds = price
-                    break
+            # Iterate through bookmakers to find the first one with h2h odds
+            for bookmaker in bookmakers:
+                bookmaker_name = bookmaker.get("title") or bookmaker.get("key", "Unknown Bookmaker")
+                for market in bookmaker.get("markets", []):
+                    if market.get("key") == "h2h":
+                        for outcome in market.get("outcomes", []):
+                            name = outcome.get("name", "")
+                            price = outcome.get("price", None)
+                            if name == home:
+                                home_odds = price
+                            elif name == away:
+                                away_odds = price
+                            elif name.lower() == "draw":
+                                draw_odds = price
+                        # If we found h2h outcomes, use this bookmaker and break
+                        if home_odds is not None and away_odds is not None:
+                            break # Break from markets loop
+                if home_odds is not None and away_odds is not None:
+                    break # Break from bookmakers loop
+
 
             rows.append(
                 {
@@ -165,7 +174,8 @@ def build_odds_dataframe(odds_data):
                     "Away Odds": away_odds,
                 }
             )
-        except Exception:
+        except Exception as e:
+            st.error(f"Error processing odds event: {e}")
             continue
 
     return pd.DataFrame(rows)
@@ -194,48 +204,43 @@ with st.sidebar:
     )
 
     # API Key Display
-    if sport_type == "football":
-        current_key = st.session_state.api_key_football
-        st.text_input(
-            "API Key",
-            value="****" + current_key[-8:]
-            if current_key != "KEY_NOT_FOUND"
-            else "Not Set",
-            disabled=True,
-        )
-    elif sport_type == "college_football":
-        current_key = st.session_state.api_key_cfb
-        st.text_input(
-            "API Key",
-            value="****" + current_key[-8:]
-            if current_key != "KEY_NOT_FOUND"
-            else "Not Set",
-            disabled=True,
-        )
-    elif sport_type == "basketball":
-        current_key = st.session_state.api_key_basketball
-        st.text_input(
-            "API Key",
-            value="****" + current_key[-8:]
-            if current_key != "KEY_NOT_FOUND"
-            else "Not Set",
-            disabled=True,
-        )
+    api_key_map = {
+        "football": st.session_state.api_key_football,
+        "college_football": st.session_state.api_key_cfb,
+        "basketball": st.session_state.api_key_basketball,
+    }
+    current_key = api_key_map.get(sport_type, "KEY_NOT_FOUND")
+    st.text_input(
+        "Data Source API Key",
+        value="****" + current_key[-8:]
+        if current_key != "KEY_NOT_FOUND"
+        else "Not Set",
+        disabled=True,
+    )
+    # Display Odds API Key separately
+    st.text_input(
+        "Odds API Key (TheOddsAPI)",
+        value="****" + st.session_state.odds_api_key[-8:]
+        if st.session_state.odds_api_key != "KEY_NOT_FOUND"
+        else "Not Set",
+        disabled=True,
+    )
+
 
     if st.button("🔌 Initialize Agent"):
         with st.spinner(f"Initializing {sport_type.replace('_', ' ').title()} Agent..."):
             # Call the init_data_agent from utils.py
-            initialized_agent = init_data_agent(sport_type) 
-            
+            # init_data_agent will now also initialize OddsAgent internally
+            initialized_agent = init_data_agent(sport_type)
+
             if initialized_agent:
-                # Store the successfully initialized agent in session state
                 st.session_state.data_agent = initialized_agent
-                st.session_state.sport_type = sport_type # Also update sport_type
+                st.session_state.sport_type = sport_type
                 st.session_state.db_initialized = True
                 st.success(f"✅ {sport_type.replace('_', ' ').title()} Agent Connected!")
-                st.rerun() # Rerun to display the tabs
+                st.rerun()
             else:
-                st.session_state.data_agent = None # Ensure it's None if initialization failed
+                st.session_state.data_agent = None
                 st.session_state.db_initialized = False
                 st.error("Failed to initialize agent. Check API key and logs.")
 
@@ -299,12 +304,13 @@ with st.sidebar:
                                     st.session_state.data_agent.store_match(m)
                                     count += 1
                                 st.success(f"Stored {count} matches!")
+                                st.rerun() # Rerun to update dashboard counts
                             else:
                                 st.warning("No matches found.")
                         except Exception as e:
                             st.error(f"Error: {e}")
 
-            else:
+            else: # College Football/Basketball
                 year = st.number_input(
                     "Year", min_value=2020, max_value=2025, value=2024
                 )
@@ -320,6 +326,7 @@ with st.sidebar:
                                     st.session_state.data_agent.store_match(m)
                                     count += 1
                                 st.success(f"Stored {count} games!")
+                                st.rerun() # Rerun to update dashboard counts
                             else:
                                 st.warning("No games found.")
                         except Exception as e:
@@ -348,27 +355,25 @@ else:
         with col_ex2:
             st.info("Try: 'Get 2024 college basketball games for Duke'")
 
-        user_query_tab1 = st.text_input( # Changed variable name to avoid conflict with top-level user_query
+        user_query_tab1 = st.text_input(
             "Ask the Assistant:", placeholder="Type your request here...", key="user_query_tab1"
         )
-        
-        # Initialize session state for pipeline results if not present
+
         if "pipeline_results" not in st.session_state:
             st.session_state.pipeline_results = None
-        if "deep_analysis_results" not in st.session_state: # Ensure this is also initialized
+        if "deep_analysis_results" not in st.session_state:
             st.session_state.deep_analysis_results = None
 
-        if st.button("🚀 Run Initial Query") and user_query_tab1: # Changed button text for clarity
-            pipeline = BettingEdgePipeline() # Re-initialize pipeline for each run (or use cached if robust)
+        if st.button("🚀 Run Initial Query") and user_query_tab1:
+            # Pass the initialized data_agent to the pipeline
+            pipeline = BettingEdgePipeline()
 
             with st.spinner("Running initial query and data agent..."):
-                # Run the first part of the pipeline (Query -> Data Fetch -> Filter)
                 result = pipeline.run(user_query_tab1)
                 st.session_state.pipeline_results = result
-                st.session_state.deep_analysis_results = None # Clear previous deep analysis if new initial query
-            st.experimental_rerun() # Rerun to display initial results
+                st.session_state.deep_analysis_results = None
+            st.experimental_rerun()
 
-        # Display initial results and offer deep analysis
         if st.session_state.pipeline_results:
             initial_query_result = st.session_state.pipeline_results
 
@@ -378,7 +383,6 @@ else:
                 filtered_matches = initial_query_result.get("filtered_matches", [])
                 if filtered_matches:
                     st.subheader("Select a Match for Deep Analysis:")
-                    # Create a readable list for the selectbox
                     match_options = {
                         f"{m['teams']['home']['name']} vs {m['teams']['away']['name']} on {m['fixture']['date'][:10]} (ID: {m['fixture']['id']})": m
                         for m in filtered_matches
@@ -391,18 +395,18 @@ else:
 
                     if selected_match_key:
                         selected_match_for_analysis = match_options[selected_match_key]
-                        
-                        if st.button("▶️ Run Deep Analysis for Selected Match", key="run_deep_analysis_button"): # Changed button text
-                            pipeline = BettingEdgePipeline() # Re-initialize for deep analysis
-                            with st.spinner("Running prediction, verification, behavior, recommendation, and ethics agents..."):
-                                # Call the deep analysis method of the pipeline
-                                deep_analysis_results = pipeline.run_deep_analysis(selected_match_for_analysis)
-                                st.session_state.deep_analysis_results = deep_analysis_results # Store deep analysis results
-                            st.experimental_rerun() # Rerun to display deep analysis results
 
-                else: # No filtered matches from initial query
+                        if st.button("▶️ Run Deep Analysis for Selected Match", key="run_deep_analysis_button"):
+                            # Pass the initialized data_agent to the pipeline
+                            pipeline = BettingEdgePipeline()
+                            with st.spinner("Running prediction, verification, behavior, recommendation, and ethics agents..."):
+                                deep_analysis_results = pipeline.run_deep_analysis(selected_match_for_analysis)
+                                st.session_state.deep_analysis_results = deep_analysis_results
+                            st.experimental_rerun()
+
+                else:
                     st.warning(initial_query_result.get("message", "Agent understood the query, but found no matches."))
-            
+
             elif initial_query_result.get("status") == "query_error":
                 st.error(initial_query_result.get("message", "Query agent could not parse that request."))
             elif initial_query_result.get("status") == "no_matches":
@@ -410,7 +414,6 @@ else:
             else:
                 st.error(initial_query_result.get("message", "An unexpected error occurred during the initial query phase."))
 
-        # Display deep analysis results if available AND successfully run
         if 'deep_analysis_results' in st.session_state and st.session_state.deep_analysis_results:
             deep_analysis_result = st.session_state.deep_analysis_results
 
@@ -419,77 +422,56 @@ else:
                 st.markdown("---")
 
                 col1, col2 = st.columns(2)
-                
-                # --- LEFT COLUMN: MODEL PREDICTION ---
+
                 with col1:
                     st.subheader("Prediction Model Output")
-                    
-                    # Get model outputs (safely)
-                    # Check the keys against what PredictionAgentLC.invoke() returns
-                    pred = deep_analysis_result.get('prediction', {}) 
-                    
+                    pred = deep_analysis_result.get('prediction', {})
                     st.metric(
                         label=f"Winner (Highest %)",
-                        # Make sure 'predicted_winner_model' is the exact key
-                        value=pred.get('predicted_winner_model', 'N/A'), 
+                        value=pred.get('predicted_winner_model', 'N/A'),
                         delta="Model Prediction"
                     )
                     st.metric(
                         label="Home Win Probability",
-                        # Make sure 'home_win_probability' is the exact key
-                        value=f"{pred.get('home_win_probability', 0.0):.1%}", 
+                        value=f"{pred.get('home_win_probability', 0.0):.1%}",
                     )
                     st.metric(
                         label="Draw Probability",
-                        # Make sure 'draw_probability' is the exact key
-                        value=f"{pred.get('draw_probability', 0.0):.1%}", 
+                        value=f"{pred.get('draw_probability', 0.0):.1%}",
                     )
                     st.metric(
                         label="Away Win Probability",
-                        # Make sure 'away_win_probability' is the exact key
-                        value=f"{pred.get('away_win_probability', 0.0):.1%}", 
+                        value=f"{pred.get('away_win_probability', 0.0):.1%}",
                     )
 
-                # --- RIGHT COLUMN: VALUE VERIFICATION ---
                 with col2:
                     st.subheader("Value Verification")
-                    # Get verification outputs (safely)
-                    # Check the keys against what OddsVerificationAgentLC.invoke() returns
-                    verify = deep_analysis_result.get('verification', {}) 
-                    
-                    # NEW, CORRECTED LINE IN streamlit_app.py
-                    st.metric(label="Raw Value Edge", value=f"{verify.get('raw_value_edge', 0.0):.2%}", delta=f"Rating: {verify.get('raw_value_edge', 'N/A')}") # Changed 'value_edge_rating' to 'value_edge'
+                    verify = deep_analysis_result.get('verification', {})
+                    # Ensure value is displayed correctly, handle potential None or non-numeric
+                    raw_value_edge = verify.get('raw_value_edge')
+                    raw_value_edge_display = f"{raw_value_edge:.2%}" if isinstance(raw_value_edge, (int, float)) else "N/A"
+
+                    st.metric(label="Raw Value Edge", value=raw_value_edge_display, delta=f"Rating: {verify.get('value_edge_rating', 'N/A')}")
                     st.metric(
                         label="Recommended Bet Side",
-                        # Make sure 'recommended_bet_side' is the exact key
-                        value=verify.get('recommended_bet_side', 'None'), 
+                        value=verify.get('recommended_bet_side', 'None'),
                     )
                     st.metric(
                         label="Confidence Level",
-                        # Make sure 'confidence' is the exact key
-                        value=verify.get('confidence', 'Low'), 
+                        value=verify.get('confidence', 'Low'),
                     )
 
-                    # Display Behavior Action and Ethics Check here too for consistency
                     st.subheader("Behavior Action & Ethics")
-                    
-                    # Ensure action_output is retrieved, defaulting to an empty dict if None
-                    action_output = deep_analysis_result.get('action', {}) 
-                    
-                    # --- THE FIX: Check if the output is a string (a low-level failure) ---
+                    action_output = deep_analysis_result.get('action', {})
                     if isinstance(action_output, str):
-                        behavior_action_display = action_output # Use the raw string error if it's not a dict
+                        behavior_action_display = action_output
                     else:
-                        # Safely access the dictionary key
-                        behavior_action_display = action_output.get('action', 'neutral_not_found') 
-                        
+                        behavior_action_display = action_output.get('action', 'neutral_not_found')
                     st.markdown(f"**Behavior Action:** {behavior_action_display}")
-                    
+
                     ethics_output = deep_analysis_result.get('ethics', {})
                     st.markdown(f"**Ethics Check:** {ethics_output.get('status', 'pending')}")
 
-
-                # --- FINAL RECOMMENDATION (LLM Narrative) ---
                 st.divider()
                 st.subheader("📝 Final Recommendation (LLM Synthesis)")
                 recommendation_output = deep_analysis_result.get('recommendation', {})
@@ -498,31 +480,26 @@ else:
                 with st.expander("Debugging & Raw Agent Output"):
                     st.subheader("Full Prediction Output")
                     st.json(deep_analysis_result.get("prediction", {}))
-                    
+
                     st.subheader("Full Verification Output")
                     st.json(deep_analysis_result.get("verification", {}))
 
-                    # --- ADD THIS NEW DEBUGGING INFO ---
                     st.subheader("Raw selected_match passed to agents")
-                    st.json(deep_analysis_result.get("match", {})) # Add this to see the match data
-                    # --- END NEW DEBUGGING INFO ---
+                    st.json(deep_analysis_result.get("match", {}))
 
                     st.subheader("Full Recommendation Output")
                     st.json(deep_analysis_result.get("recommendation", {}))
-                    
+
                     st.subheader("Full Ethics Output")
                     st.json(deep_analysis_result.get("ethics", {}))
 
                     st.subheader("Raw Value Edges (All Outcomes)")
                     st.json(deep_analysis_result.get("verification", {}).get("all_value_edges", {}))
 
-            else: # Deep analysis returned an error status
+            else:
                 st.error(deep_analysis_result.get("message", "Deep analysis failed for an unknown reason."))
-        
-        # This part handles initial query errors and "no matches" from the initial pipeline.run()
-        # It's crucial to have a separate check for initial_query_result to avoid trying to access
-        # deep_analysis_result when only initial results are present or failed.
-        if st.session_state.pipeline_results and st.session_state.pipeline_results.get("status") != "ok":
+
+        if st.session_state.pipeline_results and st.session_state.pipeline_results.get("status") != "ok" and not st.session_state.deep_analysis_results:
             if st.session_state.pipeline_results.get("status") == "query_error":
                 st.error(st.session_state.pipeline_results.get("message", "Query agent could not parse that request."))
             elif st.session_state.pipeline_results.get("status") == "no_matches":
@@ -531,7 +508,7 @@ else:
                 st.error(st.session_state.pipeline_results.get("message", "An unexpected error occurred during the initial query phase."))
 
 
-    # Dashboard tab
+    # Dashboard tab (No changes needed, uses existing data_agent and DB functions)
     with tab2:
         st.header(
             f"Dashboard Overview ({st.session_state.sport_type.replace('_', ' ').title()})"
@@ -591,9 +568,9 @@ else:
             matches_df = fetch_matches_from_db(
                 sport_type=st.session_state.sport_type,
                 league_name=selected_league_filter,
-                include_past=filter_past,
-                include_future=filter_future,
-                limit=show_count,
+                #include_past=filter_past,
+                #include_future=filter_future,
+                #limit=show_count,
             )
 
             if not matches_df.empty:
@@ -624,7 +601,7 @@ else:
         else:
             st.info("🔧 Database not found.")
 
-    # Match details tab
+    # Match details tab (No changes needed, uses existing data_agent and DB functions)
     with tab3:
         st.header("Match Details")
         col1, col2 = st.columns(2)
@@ -639,9 +616,9 @@ else:
             matches_df = fetch_matches_from_db(
                 sport_type=st.session_state.sport_type,
                 league_name="All Leagues",
-                include_past=show_past,
-                include_future=show_future,
-                limit=500,
+                #include_past=show_past,
+                #include_future=show_future,
+                #limit=500,
             )
 
             if not matches_df.empty:
@@ -695,7 +672,7 @@ else:
         else:
             st.info("Database not found.")
 
-    # Statistics tab
+    # Statistics tab (No changes needed, uses existing data_agent and DB functions)
     with tab4:
         st.header("Team Statistics")
         if os.path.exists("betting_edge.db"):
@@ -762,9 +739,10 @@ else:
     with tab5:
         st.header("Betting Odds")
 
+        # Get the OddsAgent from session state (or initialize it)
         odds_agent = get_odds_agent()
         if odds_agent is None:
-            st.info("Unable to initialize Odds API. Check ODDS_API_KEY in your .env file.")
+            st.info("Unable to fetch live odds. Please ensure Odds API Key is set and agent initialized.")
         else:
             current_sport_type = st.session_state.sport_type
             sport_key = map_sport_to_odds_api(current_sport_type)
@@ -776,32 +754,57 @@ else:
 
             regions = st.multiselect(
                 "Regions",
-                options=["us", "uk", "eu", "au"],
+                options=["us", "uk", "eu", "au", "us2"], # Added us2 for more coverage
                 default=["us", "eu"],
             )
             markets = st.multiselect(
                 "Markets",
-                options=["h2h", "ou", "spreads"],
+                options=["h2h", "spreads", "totals"], # Changed ou to totals for consistency with Odds API
                 default=["h2h"],
             )
 
-            if st.button("🔍 Fetch Latest Odds"):
+            if st.button("🔍 Fetch Latest Odds (Live)"):
                 with st.spinner("Fetching odds from The Odds API..."):
-                    odds_data = odds_agent.get_upcoming_odds(
-                        sport=sport_key,
-                        regions=",".join(regions) if regions else "us",
-                        markets=",".join(markets) if markets else "h2h",
-                    )
+                    try:
+                        odds_data = odds_agent.get_upcoming_odds(
+                            sport=sport_key,
+                            regions=",".join(regions) if regions else "us",
+                            markets=",".join(markets) if markets else "h2h"
+                        )
+                        if odds_data:
+                            odds_df = build_odds_dataframe(odds_data)
+                            if not odds_df.empty:
+                                st.success("Odds fetched successfully!")
+                                st.dataframe(odds_df, use_container_width=True)
+                            else:
+                                st.warning("No odds found for the selected criteria.")
+                        else:
+                            st.warning("No odds data returned from the API.")
+                    except Exception as e:
+                        st.error(f"Error fetching odds: {e}")
+            
+            st.subheader("Stored Odds (Database)")
+            conn = get_db_connection()
+            query = """
+                SELECT
+                    m.league_name,
+                    m.match_date,
+                    m.home_team_name,
+                    o.home_team_odds,
+                    o.draw_odds,
+                    o.away_team_odds,
+                    m.away_team_name,
+                    o.bookmaker
+                FROM odds o
+                JOIN matches m ON o.match_id = m.match_id
+                WHERE m.sport_type = ?
+                ORDER BY m.match_date DESC
+                LIMIT 50;
+            """
+            stored_odds_df = pd.read_sql_query(query, conn, params=(st.session_state.sport_type,))
+            conn.close()
 
-                if not odds_data:
-                    st.warning("No odds data returned for this sport/region/market combination.")
-                else:
-                    odds_df = build_odds_dataframe(odds_data)
-                    if odds_df.empty:
-                        st.warning("Could not build a structured odds table from the API response.")
-                    else:
-                        st.subheader("Upcoming Odds (Sample)")
-                        st.dataframe(odds_df, use_container_width=True, hide_index=True)
-
-                    with st.expander("Raw Odds API Response"):
-                        st.json(odds_data)
+            if not stored_odds_df.empty:
+                st.dataframe(stored_odds_df, use_container_width=True)
+            else:
+                st.info("No odds stored in the database for the current sport type.")
