@@ -13,3 +13,6 @@ betenv/
 *.so
 *.dll
 *.dylib
+
+#logs
+session_logs/
