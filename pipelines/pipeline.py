@@ -54,67 +54,121 @@ class BettingEdgePipeline:
         if not sport_type:
             return {"status": "query_error", "message": "Could not determine sport type from your query."}
 
-        # Initialize the DataAgent for the session. This will store it in st.session_state.
-        # It handles getting the ODDS_API_KEY from the environment and passing to DataAgent.
-        # This DataAgent instance will be used by other agents if they need to access DB/live data.
-        current_data_agent: DataAgent = init_data_agent(sport_type) # This will return the instance
+        # Initialize the DataAgent for the session (also wires in OddsAgent etc.)
+        current_data_agent: DataAgent = init_data_agent(sport_type)
 
+        all_matches_df = None
+        fallback_used = None  # just for optional debugging in the future
+
+        # -------- FOOTBALL: progressively relax filters --------
         if sport_type == "football":
+            # 1) Strict: team + league + season
             all_matches_df = fetch_matches_from_db(
                 sport_type=sport_type,
                 league_name=competition_code,
                 team_name=team_name,
-                season=season
+                season=season,
             )
+            fallback_used = "none"
+
+            # 2) If nothing and we have a season → drop season
+            if all_matches_df.empty and season is not None:
+                all_matches_df = fetch_matches_from_db(
+                    sport_type=sport_type,
+                    league_name=competition_code,
+                    team_name=team_name,
+                    # no season filter
+                )
+                fallback_used = "no_season" if not all_matches_df.empty else fallback_used
+
+            # 3) If still nothing and we have a team → drop league too (team + sport only)
+            if all_matches_df.empty and team_name:
+                all_matches_df = fetch_matches_from_db(
+                    sport_type=sport_type,
+                    team_name=team_name,
+                    # no league_name, no season
+                )
+                fallback_used = "no_season_no_league" if not all_matches_df.empty else fallback_used
+
+        # -------- COLLEGE SPORTS: relax year the same way --------
         elif sport_type in ["college_football", "basketball"]:
+            # 1) Strict: team + year
             all_matches_df = fetch_matches_from_db(
                 sport_type=sport_type,
-                year=season, # Assuming 'season' from query maps to 'year' for college sports
-                team_name=team_name
+                year=season,  # "season" from query == "year" in DB
+                team_name=team_name,
             )
+            fallback_used = "none"
+
+            # 2) If nothing and we have a year → drop year
+            if all_matches_df.empty and season is not None:
+                all_matches_df = fetch_matches_from_db(
+                    sport_type=sport_type,
+                    team_name=team_name,
+                    # no year filter
+                )
+                fallback_used = "no_year" if not all_matches_df.empty else fallback_used
         else:
             return {"status": "error", "message": f"Unsupported sport type: {sport_type}"}
 
-        if all_matches_df.empty:
-            query_season_display = season if season else 'any season'
-            return {"status": "no_matches", "message": f"No matches found for '{team_name or 'any team'}' in {sport_type} for season {query_season_display}."}
+        # -------- If still nothing after all fallbacks --------
+        if all_matches_df is None or all_matches_df.empty:
+            query_season_display = season if season else "any season"
+            return {
+                "status": "no_matches",
+                "message": (
+                    f"No matches found for '{team_name or 'any team'}' in {sport_type} "
+                    f"for {query_season_display}. Try a different team/league or fetch more data."
+                ),
+            }
 
-        # Convert DataFrame to a list of dicts for JSON serialization
+        # Convert DataFrame to expected nested structure
         filtered_matches_list = all_matches_df.to_dict(orient="records")
 
-        # Transform the flat DataFrame rows into the expected nested match JSON structure
         transformed_matches = []
         for match_row in filtered_matches_list:
             transformed_matches.append({
                 "fixture": {
                     "id": match_row.get("match_id"),
                     "date": match_row.get("match_date"),
-                    "status": match_row.get("status")
+                    "status": match_row.get("status"),
                 },
                 "league": {
                     "name": match_row.get("league_name"),
-                    "season": match_row.get("season")
+                    "season": match_row.get("season"),
                 },
                 "teams": {
-                    "home": {"id": match_row.get("home_team_id"), "name": match_row.get("home_team_name")},
-                    "away": {"id": match_row.get("away_team_id"), "name": match_row.get("away_team_name")}
+                    "home": {
+                        "id": match_row.get("home_team_id"),
+                        "name": match_row.get("home_team_name"),
+                    },
+                    "away": {
+                        "id": match_row.get("away_team_id"),
+                        "name": match_row.get("away_team_name"),
+                    },
                 },
                 "goals": {
                     "home": match_row.get("home_score"),
-                    "away": match_row.get("away_score")
+                    "away": match_row.get("away_score"),
                 },
                 "score": {
-                    "fulltime": {"home": match_row.get("home_score"), "away": match_row.get("away_score")}
+                    "fulltime": {
+                        "home": match_row.get("home_score"),
+                        "away": match_row.get("away_score"),
+                    }
                 },
-                "sport_type": sport_type # Crucial for deep analysis
+                "sport_type": sport_type,
             })
 
         return {
             "status": "ok",
             "message": f"Found {len(transformed_matches)} matches. Select one for deep analysis.",
             "filtered_matches": transformed_matches,
-            "original_query_params": parsed_query_obj.dict()
+            "original_query_params": parsed_query_obj.dict(),
+            # optional: expose which fallback path was used, for debugging
+            "query_fallback_used": fallback_used,
         }
+
 
     def run_deep_analysis(
         self,
