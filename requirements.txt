@@ -22,11 +22,11 @@ transformers
 langchain==0.0.300
 langchain-core==0.1.23
 langchain-community==0.0.19
-langchain-openai==0.0.2
+# langchain-openai REMOVED – incompatible with openai==0.28.1
 
 # ------------------------------
-# OPENAI (MUST USE THIS VERSION)
-# Supported by langchain-openai 0.0.2
+# OPENAI (LEGACY CLIENT)
+# Used by langchain.chat_models.ChatOpenAI
 # ------------------------------
 openai==0.28.1
 
@@ -41,7 +41,6 @@ matplotlib==3.8.2
 # ------------------------------
 ratelimit==2.2.1
 tenacity==8.2.3
-
 
 # ------------------------------
 # Pydantic v1 (REQUIRED)
