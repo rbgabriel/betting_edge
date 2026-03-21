@@ -108,22 +108,31 @@ class VerificationAgentLC(Runnable):
         prediction_data = inputs.get('prediction')
 
         if self.data_agent is None:
-            return {"value_edge": "Low", "confidence": "Low", "message": "DataAgent not initialized, cannot fetch odds.", "raw_value_edge": 0.0, "recommended_bet_side": "None"}
+            return {"value_edge": "--", "confidence": "--", "message": "DataAgent not initialized, cannot fetch odds.", "raw_value_edge": "--", "recommended_bet_side": "None"}
 
         if not match_details or match_details.get('status') == 'error':
-            return {"value_edge": "Low", "confidence": "Low", "message": "Match details missing.", "raw_value_edge": 0.0, "recommended_bet_side": "None"}
+            return {"value_edge": "--", "confidence": "--", "message": "Match details missing.", "raw_value_edge": "--", "recommended_bet_side": "None"}
             
         match_id = match_details['fixture']['id']
 
         # 2. Get Real-Time Odds from DataAgent
         # DataAgent's fetch_odds should handle fetching from DB or live API.
         market_odds = self.data_agent.fetch_odds(match_id)
-        
+
         # Ensure market_odds is a dictionary and contains the necessary keys
         if not market_odds or market_odds.get('home_team_odds') is None: # Use correct key here
+            # Extract match status - it's a string directly, not nested dict
+            fixture_data = match_details.get('fixture', {})
+            match_status = fixture_data.get('status') if isinstance(fixture_data, dict) else 'Unknown'
+            if isinstance(match_status, dict):
+                match_status = match_status.get('long', 'Unknown')
+
+            message = f"Market odds unavailable - The Odds API does not have coverage for this match."
+            if match_status and match_status.upper() in ['FINISHED', 'COMPLETED', 'MATCH FINISHED']:
+                message = f"Match is already finished - no live odds available for edge calculation."
             print(f"DEBUG: Market odds unavailable or incomplete for match_id {match_id}. "
-                  f"Returned: {market_odds}")
-            return {"value_edge": "Low", "confidence": "Low", "message": "Market odds unavailable for comparison.", "raw_value_edge": 0.0, "recommended_bet_side": "None"}
+                  f"Returned: {market_odds}. Match status: {match_status}")
+            return {"value_edge": "--", "confidence": "--", "message": message, "raw_value_edge": "--", "recommended_bet_side": "None"}
 
         # 3. Calculate Value - PASS MATCH_DETAILS TO THE CALCULATION
         value_analysis = self._calculate_value(prediction_data, market_odds, match_details)

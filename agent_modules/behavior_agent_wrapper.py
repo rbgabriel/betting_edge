@@ -219,10 +219,19 @@ class BehaviorAgentLC(Runnable):
         - falls back to confidence bucket mapping if those are missing.
         """
 
-        raw_edge = float(inputs.get("raw_value_edge", 0.0) or 0.0)
+        # Handle case where raw_value_edge is "--" (no odds available)
+        raw_edge_val = inputs.get("raw_value_edge", 0.0)
+        if isinstance(raw_edge_val, str) and raw_edge_val == "--":
+            raw_edge = 0.0  # No odds available, treat as neutral
+        else:
+            raw_edge = float(raw_edge_val or 0.0)
 
-        # Confidence bucket as a string
-        conf_str = str(inputs.get("confidence", "Low") or "Low").strip().lower()
+        # Confidence bucket as a string (handle "--" for no odds available)
+        conf_val = inputs.get("confidence", "Low") or "Low"
+        if isinstance(conf_val, str) and conf_val == "--":
+            conf_str = "low"  # No odds available, treat as low confidence
+        else:
+            conf_str = str(conf_val).strip().lower()
         conf_map = {
             "low": 0.45,
             "medium": 0.60,
@@ -323,6 +332,12 @@ class BehaviorAgentLC(Runnable):
             action_index = int(torch.argmax(q_vals, dim=1).item())
 
         action_tag = ACTIONS.get(action_index, "SAFE_PICK")
+
+        # NOTE: The DQN already receives the user's risk preference through the user_profile
+        # which was initialized based on risk_bucket (Low/Medium/High).
+        # The state vector is built from this risk-aware profile, so DQN makes context-aware decisions.
+        # We trust DQN to output different actions based on the different risk inputs.
+        # Example: Same match with High risk might output HIGH_RISK, with Low risk might output SAFE_PICK
 
         # Simple mapping from action -> scalar risk_factor (0..1)
         risk_factor_map = {

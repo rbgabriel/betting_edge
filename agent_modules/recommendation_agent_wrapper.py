@@ -13,66 +13,30 @@ class RecommendationAgentLC:
             max_tokens=750,
         )
 
-        # 🔁 UPDATED PROMPT – now uses behavior bucket & risk factor
-        self.prompt = PromptTemplate.from_template("""
-            You are an AI sports betting analyst. Your goal is to provide a concise, clear, and ethical betting recommendation
-            based on the provided analysis and the user's behavior profile.
+        # 🔁 RISK-AWARE PROMPT – Adapts bet side based on player risk profile
+        self.prompt = PromptTemplate.from_template("""You are a sports betting analyst. Provide a brief, tailored recommendation (120 words max).
 
-            --- Match Details ---
-            Home Team: {home_team_name}
-            Away Team: {away_team_name}
-            Match Date: {match_date}
-            Sport Type: {sport_type}
-            Match Status: {match_status}
-            {score_line_if_available}
-            Historical Flag (True = match already finished in real life): {is_historical}
+MATCH: {home_team_name} vs {away_team_name} ({match_date}, {sport_type})
+Status: {match_status} | {score_line_if_available}
+Historic match (past result): {is_historical}
 
-            --- Prediction Model Output ---
-            Predicted Winner (Model's Highest Probability): {predicted_winner_model}
-            Home Win Probability: {home_win_probability:.2%}
-            Draw Probability: {draw_probability:.2%}
-            Away Win Probability: {away_win_probability:.2%}
+PROBABILITIES & EDGE:
+Model: {predicted_winner_model} ({home_win_probability:.1%} H | {draw_probability:.1%} D | {away_win_probability:.1%} A)
+Value edge: {raw_value_edge:.4f} ({value_edge_rating}) | Confidence: {confidence_level}
+Safest bet: {safest_bet_side} ({safest_probability:.1%}) | Strategy: {recommendation_strategy}
+YOUR BET: {recommended_bet_side}
 
-            --- Value Verification Output ---
-            Raw Value Edge: {raw_value_edge:.4f}
-            Value Edge Rating: {value_edge_rating}
-            Recommended Bet Side (by value logic): {recommended_bet_side}
-            Confidence Level: {confidence_level}
+PROFILE: {behavior_action} (risk tolerance: {behavior_risk_factor:.1f}/1.0)
+Rule: LOW/MEDIUM→safer bet | HIGH/VALUE_BET→value bet
 
-            --- Behavior Policy & User Risk Profile ---
-            Behavior Action Code: {behavior_action}
-            Behavior Risk Factor (0 = ultra conservative, 1 = very aggressive): {behavior_risk_factor:.2f}
+INSTRUCTIONS:
+1. If is_historical={is_historical} (True), NO BET—explain models only.
+2. If behavior_action=EXPLANATION_ONLY, describe numbers only.
+3. Recommend {recommended_bet_side} using {recommendation_strategy} strategy.
+4. If edge<0.01 AND confidence=Low, suggest PASS alternative.
+5. End: "Only bet what you can afford to lose."
 
-            Interpret the action code as:
-            - "SAFE_PICK": user prefers conservative bets; emphasize capital preservation, lower stakes, and skipping marginal edges.
-            - "VALUE_BET": user accepts moderate risk when there is a strong value edge; focus on disciplined staking and clear reasoning.
-            - "HIGH_RISK": user is comfortable with high variance; if you still recommend a bet, stress very small stakes and the high downside.
-            - "EXPLANATION_ONLY": user wants analysis only; do NOT recommend placing any bet, only explain what the models and odds say.
-
-            --- CRITICAL SAFETY RULES ---
-            1. If is_historical is True (the match is already finished), you MUST NOT recommend placing any bet at all.
-               - Treat this as a retrospective analysis only.
-               - You may discuss what the model and odds would have suggested before kick-off.
-               - Clearly say that no betting action is possible and you are only providing post-match insight.
-
-            2. If behavior_action is "EXPLANATION_ONLY", DO NOT recommend placing a bet even if the match is in the future.
-
-            3. If the value edge is very small or confidence is low, lean toward passing or very cautious framing, especially for SAFE_PICK.
-
-            --- Task ---
-            Use ALL of the above to produce a tailored response:
-
-            A. Briefly restate the match context and predicted winner.
-            B. Explain the value edge and why the recommended side (if any) has or does not have an advantage.
-            C. Respect the behavior profile and the historical flag:
-               - If is_historical is True -> explanation only, explicitly say this is not an actionable bet.
-               - If behavior_action is "EXPLANATION_ONLY" -> explanation only, no bet.
-               - Otherwise, adapt tone and aggressiveness to the behavior_action and risk factor.
-            D. Always enforce responsible gambling: remind the user not to bet more than they can afford to lose.
-            E. If there is no meaningful value edge or the situation is unclear, recommend *not betting*.
-
-            Final Recommendation (max 250 words):
-        """)
+OUTPUT: Single paragraph with (1) match setup, (2) bet recommendation + strategy, (3) risk consideration, (4) responsible reminder.""")
 
 
         self.chain = self.prompt | self.llm | StrOutputParser()
@@ -127,24 +91,81 @@ class RecommendationAgentLC:
         elif isinstance(behavior_output, str):
             behavior_action = behavior_output
 
+        # --- Handle "--" values for missing odds ---
+        raw_edge_val = verification_output.get("raw_value_edge", 0.0)
+        raw_edge_numeric = 0.0 if (isinstance(raw_edge_val, str) and raw_edge_val == "--") else float(raw_edge_val or 0.0)
+
+        # --- SMART BET SIDE LOGIC: Risk-aware betting ---
+        # 1. Identify SAFEST bet side (highest probability outcome)
+        home_prob = prediction_output.get("home_win_probability", 0.0)
+        draw_prob = prediction_output.get("draw_probability", 0.0)
+        away_prob = prediction_output.get("away_win_probability", 0.0)
+
+        home_team_name = match_details.get("teams", {}).get("home", {}).get("name", "Home")
+        away_team_name = match_details.get("teams", {}).get("away", {}).get("name", "Away")
+        sport_type = match_details.get("sport_type", "football")
+
+        # Find safest outcome (highest probability)
+        # NOTE: DRAW/TIE outcome is considered for soccer/football sports
+        outcomes_with_prob = [
+            (f"{home_team_name}_win", home_prob),
+            (f"{away_team_name}_win", away_prob),
+        ]
+
+        # Check if sport supports DRAW/TIE (soccer/football)
+        sport_lower = sport_type.lower()
+        has_draw = "football" in sport_lower or "soccer" in sport_lower or sport_type in ["football", "soccer"]
+
+        if has_draw and draw_prob > 0:
+            outcomes_with_prob.append(("Draw", draw_prob))
+
+        safest_bet_side = max(outcomes_with_prob, key=lambda x: x[1])[0]
+        safest_prob = max(outcomes_with_prob, key=lambda x: x[1])[1]
+
+        # 2. Get VALUE bet side (already from verification agent)
+        value_bet_side = verification_output.get("recommended_bet_side", "None")
+
+        # 3. Decide which to recommend based on risk profile
+        # LOW/MEDIUM risk (0.0-0.67) → SAFEST
+        # HIGH risk (0.67-1.0) or VALUE_BET action → VALUE
+        risk_factor = behavior_risk_factor
+
+        if behavior_action in ["SAFE_PICK", "EXPLANATION_ONLY"]:
+            recommended_bet_side_final = safest_bet_side
+            recommendation_strategy = "SAFE"
+        elif behavior_action == "HIGH_RISK" or risk_factor > 0.67:
+            recommended_bet_side_final = value_bet_side
+            recommendation_strategy = "VALUE"
+        elif behavior_action == "VALUE_BET" and risk_factor > 0.5:
+            # VALUE_BET with moderate-high risk → go with value
+            recommended_bet_side_final = value_bet_side
+            recommendation_strategy = "VALUE"
+        else:
+            # MEDIUM risk (VALUE_BET with moderate risk) → SAFEST
+            recommended_bet_side_final = safest_bet_side
+            recommendation_strategy = "SAFE"
+
         # --- Prompt inputs ---
         prompt_inputs = {
-            "home_team_name": match_details.get("teams", {}).get("home", {}).get("name", "N/A"),
-            "away_team_name": match_details.get("teams", {}).get("away", {}).get("name", "N/A"),
+            "home_team_name": home_team_name,
+            "away_team_name": away_team_name,
             "match_date": match_details.get("fixture", {}).get("date", "N/A")[:10],
-            "sport_type": match_details.get("sport_type", "N/A"),
+            "sport_type": sport_type,
             "match_status": match_status,
             "score_line_if_available": score_line,
-            "is_historical": is_historical,  
+            "is_historical": is_historical,
 
             "predicted_winner_model": prediction_output.get("predicted_winner_model", "N/A"),
-            "home_win_probability": prediction_output.get("home_win_probability", 0.0),
-            "draw_probability": prediction_output.get("draw_probability", 0.0),
-            "away_win_probability": prediction_output.get("away_win_probability", 0.0),
+            "home_win_probability": home_prob,
+            "draw_probability": draw_prob,
+            "away_win_probability": away_prob,
 
-            "raw_value_edge": verification_output.get("raw_value_edge", 0.0),
+            "raw_value_edge": raw_edge_numeric,
             "value_edge_rating": verification_output.get("value_edge", "None"),
-            "recommended_bet_side": verification_output.get("recommended_bet_side", "None"),
+            "recommended_bet_side": recommended_bet_side_final,
+            "safest_bet_side": safest_bet_side,
+            "safest_probability": safest_prob,
+            "recommendation_strategy": recommendation_strategy,
             "confidence_level": verification_output.get("confidence", "Low"),
 
             "behavior_action": behavior_action,
@@ -152,4 +173,12 @@ class RecommendationAgentLC:
         }
 
         recommendation_text = self.chain.invoke(prompt_inputs)
-        return {"recommendation_text": recommendation_text}
+
+        # Return both the LLM text AND the risk-aware bet selection logic for display
+        return {
+            "recommendation_text": recommendation_text,
+            "recommended_bet_side": recommended_bet_side_final,  # Risk-aware bet
+            "recommendation_strategy": recommendation_strategy,   # SAFE or VALUE
+            "safest_bet_side": safest_bet_side,                  # For reference
+            "safest_probability": safest_prob,                   # Confidence in safest
+        }

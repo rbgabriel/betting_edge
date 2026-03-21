@@ -46,16 +46,30 @@ def get_db_connection():
     return sqlite3.connect("betting_edge.db", check_same_thread=False)
 
 
-def fetch_matches_from_db(sport_type: str, team_name: Optional[str] = None, 
-                          league_name: Optional[str] = None, season: Optional[int] = None, 
+def fetch_matches_from_db(sport_type: str, team_name: Optional[str] = None,
+                          away_team_name: Optional[str] = None,
+                          league_name: Optional[str] = None, season: Optional[int] = None,
                           year: Optional[int] = None) -> pd.DataFrame:
     conn = get_db_connection()
     query = "SELECT * FROM matches WHERE sport_type = ?"
     params = [sport_type]
 
-    if team_name:
+    if team_name and away_team_name:
+        # Fixture query: match where team A vs team B in either home/away order
+        query += (
+            " AND ("
+            "(home_team_name LIKE ? AND away_team_name LIKE ?) OR "
+            "(home_team_name LIKE ? AND away_team_name LIKE ?)"
+            ")"
+        )
+        params.extend([
+            f"%{team_name}%", f"%{away_team_name}%",
+            f"%{away_team_name}%", f"%{team_name}%",
+        ])
+    elif team_name:
         query += " AND (home_team_name LIKE ? OR away_team_name LIKE ?)"
         params.extend([f"%{team_name}%", f"%{team_name}%"])
+
     if league_name:
         query += " AND league_name LIKE ?"
         params.append(f"%{league_name}%")

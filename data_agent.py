@@ -242,11 +242,12 @@ class DataAgent:
         """
         Fetches the latest bookmaker odds for a given match_id.
         Tries to get from DB first, if not found or stale, fetches from Odds API.
+        Returns None for finished matches (no live odds available).
         """
         if self.odds_agent is None:
             self.logger.error("OddsAgent not initialized. Cannot fetch live odds.")
             return None
-        
+
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
         cursor = conn.cursor()
 
@@ -257,7 +258,7 @@ class DataAgent:
             (match_id,),
         )
         db_odds = cursor.fetchone()
-        
+
         # If fresh odds are in DB, return them
         if db_odds:
             # You might want to add a check here for `last_updated` to see if they are recent enough
@@ -271,7 +272,7 @@ class DataAgent:
 
         # 2. If not in DB or stale, get match details to query Odds API
         cursor.execute(
-            "SELECT home_team_name, away_team_name, sport_type, league_name FROM matches WHERE match_id = ?",
+            "SELECT home_team_name, away_team_name, sport_type, league_name, status FROM matches WHERE match_id = ?",
             (match_id,),
         )
         match_details = cursor.fetchone()
@@ -281,13 +282,19 @@ class DataAgent:
             self.logger.warning(f"Match ID {match_id} not found in database to fetch live odds.")
             return None
 
-        home_team, away_team, sport_type_from_db, league_name = match_details
+        home_team, away_team, sport_type_from_db, league_name, match_status = match_details
+
+        # Skip odds fetching for finished matches - Odds API only has upcoming odds
+        if match_status and match_status.upper() in ['FINISHED', 'COMPLETED', 'MATCH FINISHED']:
+            self.logger.info(f"Match ID {match_id} ({home_team} vs {away_team}) is already finished. Skipping odds fetch.")
+            return None
 
         # --- DYNAMIC MAPPING LOGIC (as you provided) ---
         odds_api_sport_map = {
             "football": {
                 "Premier League": "soccer_epl",
                 "La Liga": "soccer_spain_la_liga",
+                "Primera Division": "soccer_spain_la_liga",  # Same as La Liga
                 "Serie A": "soccer_italy_serie_a",
                 "Bundesliga": "soccer_germany_bundesliga1",
                 "Ligue 1": "soccer_france_ligue_1",
@@ -336,31 +343,78 @@ class DataAgent:
             markets="h2h"
         )
 
+        # Fallback: If UEFA Champions League returns no data, try generic "soccer"
+        if not odds_data_from_api and odds_api_sport == "soccer_uefa_champs_league":
+            self.logger.info(f"   ⚠️ No results for '{odds_api_sport}', trying generic 'soccer' fallback...")
+            odds_data_from_api = self.odds_agent.get_upcoming_odds(
+                sport="soccer",
+                regions="us,eu,au,uk",
+                markets="h2h"
+            )
+            odds_api_sport = "soccer"  # Update for logging
+
         if not odds_data_from_api:
             self.logger.warning(f"No raw odds data returned from Odds API for {home_team} vs {away_team} using sport key '{odds_api_sport}'.")
             return None
 
         # 4. Find the matching event in the API response (ROBUST MATCHING)
+        # Strip common prefixes/suffixes like "FC", "AFC", "United" to improve matching
+        def normalize_team_name(name):
+            """Remove common prefixes/suffixes and extra words for better matching."""
+            import unicodedata
+
+            name = name.lower().strip()
+            # Remove accents (é -> e, á -> a, etc.)
+            name = ''.join(c for c in unicodedata.normalize('NFD', name) if unicodedata.category(c) != 'Mn')
+            # Normalize ampersands and "and"
+            name = name.replace(' & ', ' and ')
+            # Remove common club prefixes (but keep meaningful parts like "real", "athletic")
+            prefixes = ['afc ', 'fc ', 'club ', 'ca ']
+            for prefix in prefixes:
+                if name.startswith(prefix):
+                    name = name[len(prefix):].strip()
+            # Remove "de futbol" and similar Spanish phrases
+            name = name.replace(' de futbol', '').replace(' de futbol', '')
+            # Remove common club suffixes (keep the city identifier like "de madrid", "de bilbao")
+            suffixes = [' fc', ' afc', ' cf', ' ud', ' united', ' city', ' albion']
+            for suffix in suffixes:
+                if name.endswith(suffix):
+                    name = name[:-len(suffix)].strip()
+            return name
+
         target_match_odds = None
-        home_team_lower = home_team.lower()
-        away_team_lower = away_team.lower()
+        home_normalized = normalize_team_name(home_team)
+        away_normalized = normalize_team_name(away_team)
+
+        self.logger.info(f"DEBUG: Looking for normalized match: '{home_normalized}' vs '{away_normalized}'")
+        self.logger.info(f"DEBUG: Total API events returned: {len(odds_data_from_api)}")
+        if odds_data_from_api:
+            self.logger.info(f"DEBUG: Sample API teams (first 3): {[(e.get('home_team'), e.get('away_team')) for e in odds_data_from_api[:3]]}")
 
         for event in odds_data_from_api:
-            event_home_lower = event.get('home_team', '').lower()
-            event_away_lower = event.get('away_team', '').lower()
+            event_home_normalized = normalize_team_name(event.get('home_team', ''))
+            event_away_normalized = normalize_team_name(event.get('away_team', ''))
 
-            home_match = (home_team_lower in event_home_lower) or (event_home_lower in home_team_lower)
-            away_match = (away_team_lower in event_away_lower) or (event_away_lower in away_team_lower)
+            # Try exact match first, then substring match
+            home_match = (home_normalized == event_home_normalized) or \
+                        (home_normalized in event_home_normalized) or \
+                        (event_home_normalized in home_normalized)
+            away_match = (away_normalized == event_away_normalized) or \
+                        (away_normalized in event_away_normalized) or \
+                        (event_away_normalized in away_normalized)
 
             if home_match and away_match:
                 target_match_odds = event
                 self.logger.info(f"✅ DataAgent: Matched API event '{event['home_team']} vs {event['away_team']}' for DB match '{home_team} vs {away_team}'.")
                 break
             else:
-                self.logger.debug(f"DEBUG: DataAgent: No match for '{home_team_lower} vs {away_team_lower}' with API event '{event_home_lower} vs {event_away_lower}'")
+                self.logger.debug(f"DEBUG: No match - API event: '{event_home_normalized}' vs '{event_away_normalized}' | DB teams: '{home_normalized}' vs '{away_normalized}'")
 
         if not target_match_odds:
-            self.logger.warning(f"❌ DataAgent: Could not find odds for '{home_team} vs {away_team}' in API response after checking all events (using sport key '{odds_api_sport}').")
+            self.logger.warning(f"❌ DataAgent: Could not find odds for '{home_team} vs {away_team}' in API response.")
+            self.logger.info(f"   League: {league_name} | Sport Key: {odds_api_sport}")
+            self.logger.info(f"   API returned {len(odds_data_from_api)} matches but none matched the team names.")
+            self.logger.info(f"   This match may not have live odds available from The Odds API yet.")
             return None
 
         # 5. Extract H2H odds and store them
@@ -380,9 +434,12 @@ class DataAgent:
                         name = outcome.get("name", "").lower()
                         price = outcome.get("price")
 
-                        if home_team_lower in name or name in home_team_lower:
+                        # Use normalized names for matching outcomes
+                        outcome_normalized = normalize_team_name(name)
+
+                        if outcome_normalized == home_normalized or home_normalized in outcome_normalized or outcome_normalized in home_normalized:
                             temp_odds["home"] = price
-                        elif away_team_lower in name or name in away_team_lower:
+                        elif outcome_normalized == away_normalized or away_normalized in outcome_normalized or outcome_normalized in away_normalized:
                             temp_odds["away"] = price
                         elif name == "draw":
                             temp_odds["draw"] = price

@@ -39,27 +39,103 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
+# ── Design System ─────────────────────────────────────────────────────────────
 st.markdown("""
-    <style>
-    .main-header {
-        font-size: 3rem;
-        font-weight: bold;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
-    }
-    .stButton>button {
-        width: 100%;
-    }
-    </style>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+html,body,[class*="css"]{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
+
+/* Header */
+.be-header{font-size:2.6rem;font-weight:800;background:linear-gradient(135deg,#00D2FF,#7B2FFF,#FF0080);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;text-align:center;
+  letter-spacing:-0.5px;margin-bottom:4px;}
+.be-subtitle{text-align:center;color:#8B8F97;font-size:.9rem;margin-bottom:1.4rem;}
+
+/* Gradient card */
+.gc-wrapper{padding:2px;border-radius:14px;margin-bottom:1.1rem;
+  display:flex;flex-direction:column;}
+.gc-inner{background:rgba(14,17,23,.97);border-radius:12px;padding:22px 26px;
+  flex:1;display:flex;flex-direction:column;}
+.card-title{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:1.3px;
+  color:#8B8F97;margin-bottom:14px;border-bottom:1px solid rgba(255,255,255,.07);padding-bottom:10px;}
+
+/* Equal-height cards inside Streamlit column rows */
+div[data-testid="stHorizontalBlock"]{align-items:stretch!important;}
+div[data-testid="column"]{display:flex!important;flex-direction:column!important;}
+div[data-testid="column"]>div[data-testid="stVerticalBlock"]{flex:1!important;display:flex!important;flex-direction:column!important;}
+div[data-testid="column"] .gc-wrapper{flex:1!important;}
+
+/* Metric rows */
+.card-metric-row{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px;}
+.card-metric{flex:1;min-width:110px;}
+.cm-label{font-size:.68rem;color:#8B8F97;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px;}
+.cm-value{font-size:1.75rem;font-weight:700;color:#fff;line-height:1.05;}
+.cm-value.xl{font-size:2.1rem;}
+.cm-value.pos{color:#00E676;}
+.cm-value.neg{color:#FF5252;}
+.cm-value.warn{color:#FFB300;}
+.cm-value.mute{color:#8B8F97;}
+.cm-sub{font-size:.7rem;color:#8B8F97;margin-top:3px;}
+
+/* Tags */
+.ctag{display:inline-block;padding:3px 11px;border-radius:100px;font-size:.7rem;font-weight:600;letter-spacing:.4px;}
+.ctag-safe{background:rgba(0,230,118,.13);color:#00E676;}
+.ctag-value{background:rgba(255,179,0,.13);color:#FFB300;}
+.ctag-high{background:rgba(255,82,82,.13);color:#FF5252;}
+.ctag-blocked{background:rgba(255,82,82,.18);color:#FF5252;}
+.ctag-pass{background:rgba(0,230,118,.13);color:#00E676;}
+.ctag-fail{background:rgba(255,82,82,.13);color:#FF5252;}
+.ctag-neutral{background:rgba(139,143,151,.13);color:#8B8F97;}
+.ctag-info{background:rgba(0,210,255,.13);color:#00D2FF;}
+
+/* Recommendation text */
+.rec-text{font-size:.95rem;line-height:1.7;color:#E8EAED;}
+.info-strip{background:rgba(0,210,255,.07);border-left:3px solid #00D2FF;
+  padding:10px 16px;border-radius:0 8px 8px 0;color:#8B8F97;font-size:.83rem;margin:8px 0;}
+
+/* VS badge */
+.vs-badge{font-size:1.5rem;font-weight:800;text-align:center;
+  background:linear-gradient(135deg,#00D2FF,#7B2FFF);-webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;}
+
+/* Stat strip */
+.stat-strip{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;}
+.stat-item{flex:1;min-width:110px;padding:14px 18px;background:rgba(255,255,255,.04);
+  border-radius:10px;border:1px solid rgba(255,255,255,.07);}
+.stat-num{font-size:1.9rem;font-weight:700;color:#fff;}
+.stat-lbl{font-size:.68rem;color:#8B8F97;text-transform:uppercase;letter-spacing:.8px;}
+
+/* Buttons */
+.stButton>button{border-radius:10px!important;font-weight:600!important;
+  letter-spacing:.3px!important;transition:opacity .2s!important;}
+.stButton>button:hover{opacity:.85!important;}
+
+/* Metric widget tweak */
+div[data-testid="stMetric"]{background:rgba(255,255,255,.03);border-radius:10px;
+  padding:12px 16px;border:1px solid rgba(255,255,255,.06);}
+</style>
 """, unsafe_allow_html=True)
+
+
+# ── Gradient card helper ───────────────────────────────────────────────────────
+import textwrap as _tw
+
+def render_card(title: str, content_html: str,
+                gradient: str = "linear-gradient(135deg,#00D2FF 0%,#7B2FFF 55%,#FF0080 100%)",
+                icon: str = ""):
+    # Strip leading indentation + surrounding whitespace so Streamlit's markdown
+    # parser never sees 4-space-indented lines and misinterprets them as code blocks.
+    content_html = _tw.dedent(content_html).strip()
+    title_block = (
+        f'<div class="card-title">{icon + " " if icon else ""}{title}</div>'
+        if title else ""
+    )
+    html = (
+        f'<div class="gc-wrapper" style="background:{gradient};">'
+        f'<div class="gc-inner">{title_block}{content_html}</div>'
+        f'</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
 # Initialize session state from environment variables
 if "api_key_football" not in st.session_state:
@@ -188,9 +264,9 @@ def build_odds_dataframe(odds_data):
     return pd.DataFrame(rows)
 
 
-# Main App Header
-st.markdown('<div class="main-header">⚽ Betting Edge</div>', unsafe_allow_html=True)
-st.markdown("*AI-Powered Sports Intelligence System*")
+# ── App Header ────────────────────────────────────────────────────────────────
+st.markdown('<div class="be-header">⚽ Betting Edge</div>', unsafe_allow_html=True)
+st.markdown('<div class="be-subtitle">AI-Powered Sports Intelligence · Prediction · Verification · Ethics</div>', unsafe_allow_html=True)
 st.divider()
 
 # Sidebar configuration
@@ -376,8 +452,8 @@ with st.sidebar:
 if not st.session_state.data_agent:
     st.info("👋 Welcome! Please select a sport and click 'Initialize Agent' in the sidebar to begin.")
 else:
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(
-        ["🤖 AI Assistant", "🏠 Dashboard", "⚽ Matches", "📊 Statistics", "💰 Odds"]
+    tab1, tab2, tab3, tab4 = st.tabs(
+        ["🤖 AI Assistant", "🏠 Dashboard", "📊 Statistics", "💰 Odds"]
     )
 
     # AI Assistant tab using unified pipeline
@@ -388,10 +464,40 @@ else:
             "The system will parse your request, fetch data, run prediction, verification, behavior selection, recommendation, and ethics checks."
         )
 
-            # 🔹 NEW: User behavior controls
-        st.subheader("Your Betting Profile")
+        # ── Betting Profile card ───────────────────────────────────────────────
+        render_card(
+            "Your Betting Profile",
+            """
+            <div class="card-metric-row">
+              <div class="card-metric" style="flex:0 0 auto;">
+                <div class="cm-label">Risk Mode</div>
+                <div class="cm-value" id="risk-badge" style="font-size:1.1rem;">▼ set below</div>
+              </div>
+              <div class="card-metric">
+                <div class="cm-label">Low Risk</div>
+                <div class="cm-sub">Prefer safer, higher-probability picks</div>
+              </div>
+              <div class="card-metric">
+                <div class="cm-label">Medium Risk</div>
+                <div class="cm-sub">Balance between safety and value edge</div>
+              </div>
+              <div class="card-metric">
+                <div class="cm-label">High Risk</div>
+                <div class="cm-sub">Aggressive bets with higher return potential</div>
+              </div>
+            </div>
+            <div style="margin-top:10px;padding:10px 0 0;border-top:1px solid rgba(255,255,255,.07);">
+              <span class="ctag ctag-info" style="margin-right:8px;">💡 Try</span>
+              <span style="color:#8B8F97;font-size:.82rem;">
+                "Fetch Premier League matches for Liverpool" &nbsp;·&nbsp;
+                "Get 2024 college basketball games for Duke"
+              </span>
+            </div>
+            """,
+            icon="👤",
+        )
 
-        col_profile_1, col_profile_2 = st.columns(2)
+        col_profile_1, col_profile_2 = st.columns([1, 2])
         with col_profile_1:
             risk_tolerance = st.select_slider(
                 "Risk tolerance",
@@ -399,21 +505,6 @@ else:
                 value=st.session_state.get("user_risk_tolerance", "Medium"),
             )
             st.session_state.user_risk_tolerance = risk_tolerance
-
-        with col_profile_2:
-            st.markdown(
-                """
-                - **Low** – Prefer safer recommendations.
-                - **Medium** – Balanced between safety and value.
-                - **High** – Comfortable with aggressive, high-edge bets.
-                """
-            )
-
-        col_ex1, col_ex2 = st.columns(2)
-        with col_ex1:
-            st.info("Try: 'Fetch Premier League matches for Liverpool this season'")
-        with col_ex2:
-            st.info("Try: 'Get 2024 college basketball games for Duke'")
 
         user_query_tab1 = st.text_input(
             "Ask the Assistant:", placeholder="Type your request here...", key="user_query_tab1"
@@ -528,39 +619,57 @@ else:
                 selected_match = selected_match_for_analysis
                 status = (selected_match.get("fixture", {}).get("status") or "").lower()
                 if status in ["finished", "ft", "full-time", "match finished", "completed"]:
-                    st.info(
-                        "ℹ️ This is a past match. The assistant will provide retrospective "
-                        "analysis only, not betting advice."
+                    st.markdown(
+                        '<div class="info-strip">ℹ️ This is a <strong>past match</strong>. '
+                        'The assistant will provide retrospective analysis only — no betting advice.</div>',
+                        unsafe_allow_html=True,
                     )
 
                 st.markdown("---")
+
+                # ── helpers for card rendering ─────────────────────────────
+                def _prob_cls(p):
+                    if isinstance(p, float):
+                        return "pos" if p >= 0.5 else ("warn" if p >= 0.3 else "mute")
+                    return "mute"
 
                 # -------- ROW 1: Prediction + Value --------
                 col1, col2 = st.columns(2)
 
                 with col1:
-                    st.subheader("Prediction Model Output")
                     pred = deep_analysis_result.get('prediction', {})
-                    st.metric(
-                        label=f"Winner (Highest %)",
-                        value=pred.get('predicted_winner_model', 'N/A'),
-                        delta="Model Prediction"
-                    )
-                    st.metric(
-                        label="Home Win Probability",
-                        value=f"{pred.get('home_win_probability', 0.0):.1%}",
-                    )
-                    st.metric(
-                        label="Draw Probability",
-                        value=f"{pred.get('draw_probability', 0.0):.1%}",
-                    )
-                    st.metric(
-                        label="Away Win Probability",
-                        value=f"{pred.get('away_win_probability', 0.0):.1%}",
+                    h_prob = pred.get('home_win_probability', 0.0)
+                    d_prob = pred.get('draw_probability', 0.0)
+                    a_prob = pred.get('away_win_probability', 0.0)
+                    winner = pred.get('predicted_winner_model', 'N/A')
+                    render_card(
+                        "Prediction Model Output", icon="📊",
+                        content_html=f"""
+                        <div class="card-metric-row">
+                          <div class="card-metric">
+                            <div class="cm-label">Predicted Winner</div>
+                            <div class="cm-value" style="font-size:1.2rem;">{winner}</div>
+                            <div class="cm-sub">Model top pick</div>
+                          </div>
+                        </div>
+                        <div class="card-metric-row">
+                          <div class="card-metric">
+                            <div class="cm-label">Home Win</div>
+                            <div class="cm-value xl {_prob_cls(h_prob)}">{h_prob:.1%}</div>
+                          </div>
+                          <div class="card-metric">
+                            <div class="cm-label">Draw</div>
+                            <div class="cm-value xl {_prob_cls(d_prob)}">{d_prob:.1%}</div>
+                          </div>
+                          <div class="card-metric">
+                            <div class="cm-label">Away Win</div>
+                            <div class="cm-value xl {_prob_cls(a_prob)}">{a_prob:.1%}</div>
+                          </div>
+                        </div>
+                        """,
                     )
 
                 with col2:
-                    st.subheader("Value Verification")
                     verify = deep_analysis_result.get('verification', {})
                     raw_value_edge = verify.get('raw_value_edge')
                     raw_value_edge_display = (
@@ -568,28 +677,73 @@ else:
                         if isinstance(raw_value_edge, (int, float))
                         else "N/A"
                     )
+                    edge_cls = (
+                        "pos" if isinstance(raw_value_edge, float) and raw_value_edge > 0
+                        else ("neg" if isinstance(raw_value_edge, float) and raw_value_edge < 0
+                              else "mute")
+                    )
+                    # Get risk-aware recommendation (not just value-based)
+                    recommendation = deep_analysis_result.get('recommendation', {})
+                    risk_aware_bet_side = recommendation.get('recommended_bet_side', 'None')
+                    recommendation_strategy = recommendation.get('recommendation_strategy', 'SAFE')
 
-                    st.metric(
-                        label="Raw Value Edge",
-                        value=raw_value_edge_display,
-                        delta=f"Rating: {verify.get('value_edge_rating', 'N/A')}",
-                    )
-                    st.metric(
-                        label="Recommended Bet Side",
-                        value=verify.get('recommended_bet_side', 'None'),
-                    )
-                    st.metric(
-                        label="Confidence Level",
-                        value=verify.get('confidence', 'Low'),
+                    # Format display (handle Draw, Home win, Away win)
+                    if risk_aware_bet_side and risk_aware_bet_side.lower() == "draw":
+                        bet_side_display = "🔄 Draw"
+                    elif risk_aware_bet_side and "_win" in risk_aware_bet_side:
+                        team_name = risk_aware_bet_side.replace("_win", "")
+                        bet_side_display = f"✓ {team_name}"
+                    else:
+                        bet_side_display = risk_aware_bet_side
+
+                    # Add strategy indicator
+                    if recommendation_strategy == "BLOCKED":
+                        strategy_emoji = "⛔"
+                        bet_side_display = "NONE"
+                        strat_tag_cls = "ctag-blocked"
+                    elif recommendation_strategy == "VALUE":
+                        strategy_emoji = "💰"
+                        strat_tag_cls = "ctag-value"
+                    else:
+                        strategy_emoji = "🛡️"
+                        strat_tag_cls = "ctag-safe"
+
+                    conf = verify.get('confidence', 'Low')
+                    conf_cls = "ctag-pass" if conf == "High" else ("ctag-value" if conf == "Medium" else "ctag-neutral")
+                    edge_rating = verify.get('value_edge_rating', 'N/A')
+                    rating_cls = "ctag-pass" if edge_rating == "High" else ("ctag-value" if edge_rating == "Medium" else "ctag-neutral")
+
+                    render_card(
+                        "Value Verification", icon="🔍",
+                        content_html=f"""
+                        <div class="card-metric-row">
+                          <div class="card-metric">
+                            <div class="cm-label">Raw Value Edge</div>
+                            <div class="cm-value xl {edge_cls}">{raw_value_edge_display}</div>
+                            <div class="cm-sub"><span class="ctag {rating_cls}">Rating: {edge_rating}</span></div>
+                          </div>
+                          <div class="card-metric">
+                            <div class="cm-label">Confidence</div>
+                            <div class="cm-value" style="font-size:1.2rem;">{conf}</div>
+                            <div class="cm-sub"><span class="ctag {conf_cls}">{conf}</span></div>
+                          </div>
+                        </div>
+                        <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.07);">
+                          <div class="cm-label">Risk-Aware Recommendation</div>
+                          <div style="margin-top:6px;display:flex;align-items:center;gap:8px;">
+                            <span style="font-size:1.3rem;font-weight:700;color:#fff;">{strategy_emoji} {bet_side_display}</span>
+                            <span class="ctag {strat_tag_cls}">{recommendation_strategy}</span>
+                          </div>
+                        </div>
+                        """,
                     )
 
-                # -------- ROW 2: Behavior + Ethics (NEW LAYOUT) --------
+                # -------- ROW 2: Behavior + Ethics --------
                 st.divider()
                 beh_col, eth_col = st.columns([2, 1])
 
                 # ---- Behavior column ----
                 with beh_col:
-                    st.subheader("Behavior Action & Ethics")
                     action_output = deep_analysis_result.get('action', {})
 
                     if isinstance(action_output, str):
@@ -597,6 +751,7 @@ else:
                         bucket_name = action_output
                         bucket_description = ""
                         risk_factor_display = "N/A"
+                        risk_factor = None
                         user_profile_display = None
                     else:
                         action_tag = action_output.get("action", "SAFE_PICK")
@@ -610,43 +765,79 @@ else:
                         )
                         user_profile_display = action_output.get("user_profile")
 
-                    st.markdown(f"**Behavior Bucket:** {bucket_name}")
-                    if bucket_description:
-                        st.caption(bucket_description)
-
-                    st.markdown(f"**Behavior Risk Factor:** {risk_factor_display}")
-
                     # Budget-based suggested stake
                     bet_budget = st.session_state.get("bet_budget", 0)
-
                     stake_fraction_map = {
-                        "SAFE_PICK": 0.5,          # up to 50% of per-pick budget
-                        "VALUE_BET": 0.35,         # balanced stake
-                        "HIGH_RISK": 0.15,         # small stake on high risk
-                        "EXPLANATION_ONLY": 0.0,   # no stake
+                        "SAFE_PICK": 0.5,
+                        "VALUE_BET": 0.35,
+                        "HIGH_RISK": 0.15,
+                        "EXPLANATION_ONLY": 0.0,
                     }
                     stake_fraction = stake_fraction_map.get(action_tag, 0.0)
                     suggested_stake = round(bet_budget * stake_fraction, 2)
 
-                    verify = deep_analysis_result.get("verification", {})
-                    recommended_side = verify.get("recommended_bet_side", "None")
+                    recommendation = deep_analysis_result.get("recommendation", {})
+                    recommended_side = recommendation.get("recommended_bet_side", "None")
+                    recommendation_strategy = recommendation.get("recommendation_strategy", "SAFE")
+                    safest_bet = recommendation.get("safest_bet_side", "N/A")
+                    safest_prob = recommendation.get("safest_probability", 0.0)
+
+                    if recommended_side and recommended_side.lower() == "draw":
+                        bet_display = "🔄 Draw"
+                    elif recommended_side and "_win" in recommended_side:
+                        team_name = recommended_side.replace("_win", "")
+                        bet_display = f"✓ {team_name}"
+                    else:
+                        bet_display = recommended_side
+
+                    strategy_emoji = "🛡️" if recommendation_strategy == "SAFE" else "💰"
+                    strategy_label = "Safer bet" if recommendation_strategy == "SAFE" else "Value bet"
+
+                    bkt_tag_cls = {
+                        "SAFE_PICK": "ctag-safe",
+                        "VALUE_BET": "ctag-value",
+                        "HIGH_RISK": "ctag-high",
+                        "EXPLANATION_ONLY": "ctag-neutral",
+                    }.get(action_tag, "ctag-neutral")
+
+                    rf_cls = "mute"
+                    if isinstance(risk_factor, float):
+                        rf_cls = "pos" if risk_factor < 0.4 else ("warn" if risk_factor < 0.7 else "neg")
 
                     if bet_budget > 0 and suggested_stake > 0:
-                        st.markdown(
-                            f"**Suggested Stake:** ${suggested_stake:.2f} "
-                            f"on **{recommended_side}** "
-                            f"(from your ${bet_budget:.2f} per-pick budget)."
+                        stake_html = (
+                            f'<div style="margin-top:8px;">'
+                            f'<span class="cm-label">Suggested Stake</span><br>'
+                            f'<span style="font-size:1.4rem;font-weight:700;color:#fff;">${suggested_stake:.2f}</span>'
+                            f' <span style="color:#8B8F97;font-size:.82rem;">on <strong style="color:#E8EAED;">{bet_display}</strong>'
+                            f' {strategy_emoji} {strategy_label}</span>'
+                            + (f'<div class="cm-sub" style="margin-top:4px;">📊 Safest: {safest_bet} ({safest_prob:.1%})</div>'
+                               if safest_bet != "N/A" else "")
+                            + f'<div class="cm-sub">from ${bet_budget:.2f} per-pick budget</div></div>'
                         )
-                    elif bet_budget > 0 and stake_fraction == 0.0:
-                        st.markdown(
-                            "**Suggested Stake:** $0.00 — this bucket recommends **no bet**, "
-                            "focus on explanation only."
-                        )
+                    elif bet_budget > 0:
+                        stake_html = '<div class="info-strip" style="margin-top:8px;">No stake — this bucket recommends <strong>explanation only</strong>.</div>'
                     else:
-                        st.markdown(
-                            "**Suggested Stake:** $0.00 — set a positive budget in the "
-                            "sidebar to see stake suggestions."
-                        )
+                        stake_html = '<div class="info-strip" style="margin-top:8px;">Set a budget in the sidebar to see stake suggestions.</div>'
+
+                    render_card(
+                        "Behavior Action", icon="🧠",
+                        content_html=f"""
+                        <div class="card-metric-row">
+                          <div class="card-metric">
+                            <div class="cm-label">Behavior Bucket</div>
+                            <div class="cm-value" style="font-size:1.2rem;">{bucket_name}</div>
+                            <div class="cm-sub"><span class="ctag {bkt_tag_cls}">{action_tag}</span></div>
+                          </div>
+                          <div class="card-metric">
+                            <div class="cm-label">Risk Factor</div>
+                            <div class="cm-value xl {rf_cls}">{risk_factor_display}</div>
+                          </div>
+                        </div>
+                        {('<div class="cm-sub" style="margin-bottom:8px;color:#8B8F97;">' + bucket_description + '</div>') if bucket_description else ''}
+                        {stake_html}
+                        """,
+                    )
 
                     if user_profile_display:
                         with st.expander("View Behavior User Profile (DQN Inputs)"):
@@ -654,30 +845,56 @@ else:
 
                 # ---- Ethics column ----
                 with eth_col:
-                    st.subheader("Ethics & Safety")
                     ethics_output = deep_analysis_result.get("ethics", {})
                     ethics_status = ethics_output.get("status", "pending")
-                    st.markdown(f"**Ethics Check:** `{ethics_status}`")
-
                     viol_prob = ethics_output.get("violation_prob")
                     safe_prob = ethics_output.get("safe_prob")
                     backend = ethics_output.get("backend", "unknown")
 
+                    eth_tag = "ctag-pass" if ethics_status == "pass" else ("ctag-fail" if ethics_status == "fail" else "ctag-neutral")
+                    eth_icon = "✅" if ethics_status == "pass" else ("⛔" if ethics_status == "fail" else "⏳")
+
+                    scores_html = ""
                     if isinstance(viol_prob, (int, float)) and isinstance(safe_prob, (int, float)):
-                        st.caption(
-                            f"Ethics classifier backend: `{backend}` · "
-                            f"Violation probability: **{viol_prob:.1%}**, "
-                            f"Safe probability: **{safe_prob:.1%}**"
-                        )
-                    else:
-                        st.caption(f"Ethics backend: `{backend}` (no scores available)")
+                        scores_html = f"""
+                        <div class="card-metric-row" style="margin-top:10px;">
+                          <div class="card-metric">
+                            <div class="cm-label">Violation Prob</div>
+                            <div class="cm-value {'neg' if viol_prob > 0.4 else 'pos'}" style="font-size:1.3rem;">{viol_prob:.1%}</div>
+                          </div>
+                          <div class="card-metric">
+                            <div class="cm-label">Safe Prob</div>
+                            <div class="cm-value {'pos' if safe_prob > 0.6 else 'warn'}" style="font-size:1.3rem;">{safe_prob:.1%}</div>
+                          </div>
+                        </div>
+                        <div class="cm-sub">Backend: <code style="color:#8B8F97;">{backend}</code></div>
+                        """
+
+                    render_card(
+                        "Ethics & Safety", icon="⚖️",
+                        gradient="linear-gradient(135deg,#00D2FF 0%,#0066CC 100%)",
+                        content_html=f"""
+                        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+                          <span style="font-size:1.6rem;">{eth_icon}</span>
+                          <div>
+                            <div class="cm-label">Status</div>
+                            <span class="ctag {eth_tag}" style="font-size:.85rem;">{ethics_status.upper()}</span>
+                          </div>
+                        </div>
+                        {scores_html}
+                        """,
+                    )
 
 
 
                 st.divider()
-                st.subheader("📝 Final Recommendation (LLM Synthesis)")
                 recommendation_output = deep_analysis_result.get('recommendation', {})
-                st.info(recommendation_output.get("recommendation_text", "No recommendation text available."))
+                rec_text = recommendation_output.get("recommendation_text", "No recommendation text available.")
+                render_card(
+                    "Final Recommendation — LLM Synthesis", icon="📝",
+                    gradient="linear-gradient(135deg,#7B2FFF 0%,#FF0080 100%)",
+                    content_html=f'<div class="rec-text">{rec_text}</div>',
+                )
 
                 with st.expander("Debugging & Raw Agent Output"):
                     st.subheader("Full Prediction Output")
@@ -755,10 +972,25 @@ else:
             matches_with_odds = cursor.fetchone()[0]
             conn.close()
 
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Recent Matches", recent_matches)
-            col2.metric("Upcoming Matches", upcoming_matches)
-            col3.metric("Matches with Odds", matches_with_odds)
+            render_card(
+                "Database Overview", icon="📊",
+                content_html=f"""
+                <div class="stat-strip">
+                  <div class="stat-item">
+                    <div class="stat-num">{recent_matches}</div>
+                    <div class="stat-lbl">Recent Matches (7d)</div>
+                  </div>
+                  <div class="stat-item">
+                    <div class="stat-num" style="color:#00D2FF;">{upcoming_matches}</div>
+                    <div class="stat-lbl">Upcoming Matches</div>
+                  </div>
+                  <div class="stat-item">
+                    <div class="stat-num" style="color:#7B2FFF;">{matches_with_odds}</div>
+                    <div class="stat-lbl">Matches with Odds</div>
+                  </div>
+                </div>
+                """,
+            )
 
             st.divider()
             st.subheader("📅 Latest Matches")
@@ -815,79 +1047,8 @@ else:
         else:
             st.info("🔧 Database not found.")
 
-    # Match details tab (No changes needed, uses existing data_agent and DB functions)
+    # Statistics tab
     with tab3:
-        st.header("Match Details")
-        col1, col2 = st.columns(2)
-        with col1:
-            show_past = st.checkbox("Show Past Matches", value=True, key="tab3_past")
-        with col2:
-            show_future = st.checkbox(
-                "Show Future Matches", value=True, key="tab3_future"
-            )
-
-        if os.path.exists("betting_edge.db"):
-            matches_df = fetch_matches_from_db(
-                sport_type=st.session_state.sport_type,
-                league_name="All Leagues",
-                #include_past=show_past,
-                #include_future=show_future,
-                #limit=500,
-            )
-
-            if not matches_df.empty:
-                match_options = matches_df.apply(
-                    lambda x: f"{x['home_team_name']} vs {x['away_team_name']} ({x['match_date'][:10]})",
-                    axis=1,
-                ).tolist()
-
-                selected_match_idx = st.selectbox(
-                    "Select a match",
-                    range(len(match_options)),
-                    format_func=lambda x: match_options[x],
-                )
-
-                if selected_match_idx is not None:
-                    selected_match = matches_df.iloc[selected_match_idx]
-                    match_id = int(selected_match["match_id"])
-
-                    c1, c2, c3 = st.columns([2, 1, 2])
-                    c1.subheader(selected_match["home_team_name"])
-                    c1.metric(
-                        "Home",
-                        int(selected_match["home_score"])
-                        if pd.notna(selected_match["home_score"])
-                        else "-",
-                    )
-                    c2.markdown(
-                        "<h3 style='text-align: center;'>VS</h3>",
-                        unsafe_allow_html=True,
-                    )
-                    c2.markdown(
-                        f"<p style='text-align: center;'>{selected_match['status']}</p>",
-                        unsafe_allow_html=True,
-                    )
-                    c3.subheader(selected_match["away_team_name"])
-                    c3.metric(
-                        "Away",
-                        int(selected_match["away_score"])
-                        if pd.notna(selected_match["away_score"])
-                        else "-",
-                    )
-
-                    if st.session_state.sport_type == "football":
-                        stats_df = fetch_match_stats(match_id)
-                        if not stats_df.empty:
-                            st.divider()
-                            st.subheader("Statistics")
-                            st.dataframe(stats_df, use_container_width=True)
-            else:
-                st.info("No matches available.")
-        else:
-            st.info("Database not found.")
-
-    # Statistics tab (No changes needed, uses existing data_agent and DB functions)
-    with tab4:
         st.header("Team Statistics")
         if os.path.exists("betting_edge.db"):
             conn = get_db_connection()
@@ -915,10 +1076,13 @@ else:
                             0
                         ]
                     )
-                    if st.session_state.data_agent:
+                    if not st.session_state.data_agent:
+                        st.info("Initialize the agent in the sidebar to load recent matches.")
+                    else:
                         recent = st.session_state.data_agent.get_recent_matches(team_id)
-                        if recent:
-                            st.subheader(f"Recent Form - {selected_team}")
+                        if not recent:
+                            st.info(f"No finished matches found for {selected_team}.")
+                        else:
                             wins = sum(
                                 1
                                 for m in recent
@@ -931,29 +1095,41 @@ else:
                                     and m["away_score"] > m["home_score"]
                                 )
                             )
-                            losses = len(recent) - wins
-                            st.metric(
-                                "Win Rate (Last 5)",
-                                f"{(wins / len(recent) * 100):.0f}%",
+                            draws = sum(
+                                1
+                                for m in recent
+                                if (
+                                    m["home_team_id"] == team_id
+                                    or m["away_team_id"] == team_id
+                                )
+                                and m["home_score"] == m["away_score"]
                             )
-                            st.dataframe(
-                                pd.DataFrame(recent)[
-                                    [
-                                        "match_date",
-                                        "home_team_name",
-                                        "home_score",
-                                        "away_score",
-                                        "away_team_name",
-                                    ]
-                                ],
-                                use_container_width=True,
+                            losses = len(recent) - wins - draws
+                            win_rate = wins / len(recent)
+                            wr_cls = "pos" if win_rate >= 0.5 else ("warn" if win_rate >= 0.3 else "neg")
+                            render_card(
+                                f"Recent Form — {selected_team}", icon="📈",
+                                content_html=f"""
+<div class="stat-strip">
+<div class="stat-item"><div class="stat-num {wr_cls}">{win_rate:.0%}</div><div class="stat-lbl">Win Rate (Last {len(recent)})</div></div>
+<div class="stat-item"><div class="stat-num" style="color:#00E676;">{wins}</div><div class="stat-lbl">Wins</div></div>
+<div class="stat-item"><div class="stat-num" style="color:#8B8F97;">{draws}</div><div class="stat-lbl">Draws</div></div>
+<div class="stat-item"><div class="stat-num" style="color:#FF5252;">{losses}</div><div class="stat-lbl">Losses</div></div>
+</div>""",
                             )
+                            recent_df = pd.DataFrame(recent)
+                            cols_available = [
+                                c for c in
+                                ["match_date", "home_team_name", "home_score", "away_score", "away_team_name"]
+                                if c in recent_df.columns
+                            ]
+                            if cols_available:
+                                st.dataframe(recent_df[cols_available], use_container_width=True)
 
-    # Odds tab (UPDATED TO USE OddsAgent + mirror sport_type)
-    with tab5:
+    # Odds tab
+    with tab4:
         st.header("Betting Odds")
 
-        # Get the OddsAgent from session state (or initialize it)
         odds_agent = get_odds_agent()
         if odds_agent is None:
             st.info("Unable to fetch live odds. Please ensure Odds API Key is set and agent initialized.")
@@ -961,9 +1137,22 @@ else:
             current_sport_type = st.session_state.sport_type
             sport_key = map_sport_to_odds_api(current_sport_type)
 
-            st.markdown(
-                f"Showing upcoming odds for **{current_sport_type.replace('_', ' ').title()}** "
-                f"(Odds API sport key: `{sport_key}`)"
+            render_card(
+                "Live Odds Source", icon="💰",
+                gradient="linear-gradient(135deg,#00D2FF 0%,#7B2FFF 100%)",
+                content_html=f"""
+                <div class="card-metric-row">
+                  <div class="card-metric">
+                    <div class="cm-label">Sport</div>
+                    <div class="cm-value" style="font-size:1.1rem;">{current_sport_type.replace("_", " ").title()}</div>
+                  </div>
+                  <div class="card-metric">
+                    <div class="cm-label">Odds API Key</div>
+                    <div class="cm-value" style="font-size:1rem;"><code style="color:#00D2FF;">{sport_key}</code></div>
+                  </div>
+                </div>
+                <div class="cm-sub">Select regions &amp; markets below, then fetch live odds.</div>
+                """,
             )
 
             regions = st.multiselect(
@@ -997,7 +1186,7 @@ else:
                     except Exception as e:
                         st.error(f"Error fetching odds: {e}")
             
-            st.subheader("Stored Odds (Database)")
+            st.markdown("### 🗄️ Stored Odds (Database)")
             conn = get_db_connection()
             query = """
                 SELECT

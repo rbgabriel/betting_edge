@@ -48,6 +48,7 @@ class BettingEdgePipeline:
         
         sport_type = query_dict.get("sport_type")
         team_name = query_dict.get("team_name")
+        away_team_name = query_dict.get("away_team_name")
         competition_code = query_dict.get("competition_code")
         season = query_dict.get("season")
 
@@ -62,50 +63,60 @@ class BettingEdgePipeline:
 
         # -------- FOOTBALL: progressively relax filters --------
         if sport_type == "football":
-            # 1) Strict: team + league + season
+            # 1) Strict: team(s) + league + season
             all_matches_df = fetch_matches_from_db(
                 sport_type=sport_type,
                 league_name=competition_code,
                 team_name=team_name,
+                away_team_name=away_team_name,
                 season=season,
             )
             fallback_used = "none"
 
-            # 2) If nothing and we have a season → drop season
+            # 2) Drop season if nothing found
             if all_matches_df.empty and season is not None:
                 all_matches_df = fetch_matches_from_db(
                     sport_type=sport_type,
                     league_name=competition_code,
                     team_name=team_name,
-                    # no season filter
+                    away_team_name=away_team_name,
                 )
                 fallback_used = "no_season" if not all_matches_df.empty else fallback_used
 
-            # 3) If still nothing and we have a team → drop league too (team + sport only)
+            # 3) Drop league + season (team-only search)
             if all_matches_df.empty and team_name:
                 all_matches_df = fetch_matches_from_db(
                     sport_type=sport_type,
                     team_name=team_name,
-                    # no league_name, no season
+                    away_team_name=away_team_name,
                 )
                 fallback_used = "no_season_no_league" if not all_matches_df.empty else fallback_used
+
+            # 4) If fixture query and still nothing → fall back to single-team search
+            if all_matches_df.empty and away_team_name and team_name:
+                all_matches_df = fetch_matches_from_db(
+                    sport_type=sport_type,
+                    team_name=team_name,
+                )
+                fallback_used = "fixture_to_single_team" if not all_matches_df.empty else fallback_used
 
         # -------- COLLEGE SPORTS: relax year the same way --------
         elif sport_type in ["college_football", "basketball"]:
             # 1) Strict: team + year
             all_matches_df = fetch_matches_from_db(
                 sport_type=sport_type,
-                year=season,  # "season" from query == "year" in DB
+                year=season,
                 team_name=team_name,
+                away_team_name=away_team_name,
             )
             fallback_used = "none"
 
-            # 2) If nothing and we have a year → drop year
+            # 2) Drop year
             if all_matches_df.empty and season is not None:
                 all_matches_df = fetch_matches_from_db(
                     sport_type=sport_type,
                     team_name=team_name,
-                    # no year filter
+                    away_team_name=away_team_name,
                 )
                 fallback_used = "no_year" if not all_matches_df.empty else fallback_used
         else:
@@ -241,6 +252,23 @@ class BettingEdgePipeline:
         ethics_output = self.ethics_agent.invoke(
             recommendation_output.get("recommendation_text", "")
         )
+
+        # 6b. If ethics check FAILS, modify recommendation to not suggest a bet
+        if ethics_output.get("status") == "fail":
+            # Ethics violation detected - block the bet recommendation
+            recommendation_output = {
+                "recommendation_text": (
+                    f"⚠️ ETHICS CHECK FAILED\n\n"
+                    f"Our responsible gambling classifier detected potential ethical concerns "
+                    f"with the previous recommendation (violation probability: {ethics_output.get('violation_prob', 'N/A'):.1%}).\n\n"
+                    f"**NO BET RECOMMENDED** - Please review the analysis instead:\n\n"
+                    f"{recommendation_output.get('recommendation_text', 'No recommendation available.')}"
+                ),
+                "recommended_bet_side": "None",        # Block bet recommendation
+                "recommendation_strategy": "BLOCKED",   # Indicate ethics block
+                "safest_bet_side": "EXPLANATION_ONLY",
+                "safest_probability": 0.0,
+            }
 
         # 7. Optional: extra match context for display
         current_data_agent = init_data_agent(sport_type)
