@@ -341,25 +341,37 @@ with st.sidebar:
 
     # Database status
     st.subheader("📊 Database Status")
-    if os.path.exists("betting_edge.db"):
+    try:
         conn = get_db_connection()
         cursor = conn.cursor()
-
-        cursor.execute("SELECT COUNT(*) FROM matches")
-        match_count = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM match_stats")
-        stats_count = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM odds")
-        odds_count = cursor.fetchone()[0]
-
-        conn.close()
-
-        st.metric("Matches", match_count)
-        st.metric("Statistics", stats_count)
-        st.metric("Odds Entries", odds_count)
-    else:
+        # Check tables exist before querying — on fresh deployment the file
+        # exists but tables are created only after the first agent init
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='matches'"
+        )
+        if cursor.fetchone():
+            cursor.execute("SELECT COUNT(*) FROM matches")
+            match_count = cursor.fetchone()[0]
+            cursor.execute(
+                "SELECT COUNT(*) FROM match_stats"
+                if cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='match_stats'").fetchone()
+                else "SELECT 0"
+            )
+            stats_count = cursor.fetchone()[0]
+            cursor.execute(
+                "SELECT COUNT(*) FROM odds"
+                if cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='odds'").fetchone()
+                else "SELECT 0"
+            )
+            odds_count = cursor.fetchone()[0]
+            conn.close()
+            st.metric("Matches", match_count)
+            st.metric("Statistics", stats_count)
+            st.metric("Odds Entries", odds_count)
+        else:
+            conn.close()
+            st.info("Click 'Initialize Agent' to set up the database.")
+    except Exception:
         st.info("Database not yet initialized")
 
     st.divider()
