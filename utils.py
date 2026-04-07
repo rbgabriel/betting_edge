@@ -9,11 +9,11 @@ from typing import Optional, List, Dict, Any
 
 # --- New/Modified: init_data_agent to handle Odds API key and DataAgent instance ---
 def init_data_agent(sport_type: str = "football"):
-    openai_api_key = os.getenv("OPENAI_API_KEY")
+    google_api_key = os.getenv("GOOGLE_API_KEY")
     odds_api_key = os.getenv("ODDS_API_KEY")
 
-    if not openai_api_key:
-        st.error("OPENAI_API_KEY not found in environment variables.")
+    if not google_api_key:
+        st.error("GOOGLE_API_KEY not found in environment variables.")
         st.stop()
 
     # Check if DataAgent is already initialized for the current sport_type

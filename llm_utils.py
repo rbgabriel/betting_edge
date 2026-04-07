@@ -2,13 +2,13 @@
 """
 Holds utility functions that use LLMs to assist other agents.
 """
-from langchain.chat_models import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 # Initialize the LLM (this will be used by multiple agents)
 # It's fast, smart, and cheap.
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
 
 def analyze_api_error(failed_url: str, status_code: int, raw_text: str) -> str:
     """

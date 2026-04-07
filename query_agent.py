@@ -15,9 +15,9 @@ import sqlite3
 import datetime
 from typing import Optional, Literal
 
-from langchain.chat_models import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.prompts import ChatPromptTemplate
-from langchain_core.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 from langchain.output_parsers import PydanticOutputParser
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -260,7 +260,7 @@ class SportsDataQuery(BaseModel):
 
 
 # ── LLM + parser setup ────────────────────────────────────────────────────────
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
 parser = PydanticOutputParser(pydantic_object=SportsDataQuery)
 
 # Build a compact vocab string to inject into the prompt

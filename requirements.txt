@@ -18,19 +18,12 @@ transformers
 tokenizers
 
 # ------------------------------
-# LANGCHAIN (STABLE VERSIONS)
-# Matching Pydantic v1 + OpenAI 0.28
+# LANGCHAIN + GOOGLE GEMINI
 # ------------------------------
-langchain==0.0.300
-langchain-core==0.1.23
-langchain-community==0.0.19
-# langchain-openai REMOVED – incompatible with openai==0.28.1
-
-# ------------------------------
-# OPENAI (LEGACY CLIENT)
-# Used by langchain.chat_models.ChatOpenAI
-# ------------------------------
-openai==0.28.1
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+langchain-google-genai>=2.0.0
 
 # ------------------------------
 # VISUALIZATION
@@ -45,6 +38,6 @@ ratelimit==2.2.1
 tenacity==8.2.3
 
 # ------------------------------
-# Pydantic v1 (REQUIRED)
+# Pydantic v2
 # ------------------------------
-pydantic==1.10.13
+pydantic>=2.0

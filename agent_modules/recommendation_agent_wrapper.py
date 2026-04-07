@@ -1,16 +1,17 @@
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_community.llms import OpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 import os
 from typing import Dict, Any
 
 
 class RecommendationAgentLC:
     def __init__(self):
-        self.llm = OpenAI(
-            api_key=os.getenv("OPENAI_API_KEY"),
+        self.llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
             temperature=0.7,
-            max_tokens=750,
+            max_output_tokens=750,
+            google_api_key=os.getenv("GOOGLE_API_KEY"),
         )
 
         # 🔁 RISK-AWARE PROMPT – Adapts bet side based on player risk profile
